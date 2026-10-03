@@ -623,7 +623,44 @@ describe('format · setup', () => {
       '  2 agents registered — none selected; pass --agent or run `rook agent use <id>`',
     ])
     expect(exploreText(stdout)).toContain('! rook profile add <name> --from connection.md')
-    expect(exploreText('▸ agents analysed — none yet\n')).toContain('found no agents')
+    expect(exploreText('▸ agents analysed — none yet\n')).toContain('found no agent in this repository')
+    expect(exploreText('▸ agents analysed — none yet\n')).toContain('instruction naming the file and entry point')
+    expect(exploreText('▸ agents analysed — none yet\n')).not.toContain('generate tool')
+  })
+
+  test('a profile test that fails on a ROOK_* variable points at rook, not at rook env set', () => {
+    // verbatim from a live profile test with the installed rook
+    const stderr = 'demo-slow-tool: at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5) Node.js v24.9.0\nError: ROOK_STATE_DIR is required\n'
+    const text = profileTestText('demo-slow-tool', 1, '', stderr)
+
+    expect(text).toContain('ROOK_STATE_DIR is a variable rook hands the profile')
+    expect(text).toContain('! rook update')
+    expect(text).not.toContain('rook env set NAME')
+    expect(profileTestText('x', 1, '', 'x: not set on this machine — API_KEY\n')).toContain('! rook env set NAME <value>')
+  })
+
+  test('explore as the installed rook prints it: a line per agent, and the agents themselves read from disk', () => {
+    // rook 0.1.x without a terminal, verbatim from a live run
+    const unchanged = [
+      'nothing on disk moved — no scan needed',
+      'returns-desk-assistant: unchanged, not re-analysed',
+      'nothing changed — 1 agent(s) already current, no credits spent',
+      'on disk only — nothing has been recorded upstream',
+      '  next:  rook generate    write scenarios for the active agent',
+    ].join('\n')
+
+    expect(exploreText(unchanged, [{ id: 'returns-desk-assistant', features: 4 }]).split('\n').slice(0, 2)).toEqual([
+      'rook explore: 1 agent — nothing changed — 1 agent(s) already current, no credits spent',
+      '  returns-desk-assistant — unchanged, not re-analysed',
+    ])
+    // a fresh analysis: no table in this build, so the disk names the agent and counts its features
+    const analysed = 'written: .testmuai/rook/projects/P/agents/returns-desk-assistant/\nactive agent: Returns desk assistant — the only one registered\n'
+
+    expect(exploreText(analysed, [{ id: 'returns-desk-assistant', features: 4 }]).split('\n').slice(0, 2)).toEqual([
+      'rook explore: 1 agent',
+      '  returns-desk-assistant — 4 features',
+    ])
+    expect(exploreText('1 analysed, 0 unchanged, 1.04 credits\n', [])).toContain('found no agent in this repository (1 analysed, 0 unchanged, 1.04 credits)')
   })
 
   test('profiles and profile tests, as rook printed them', () => {

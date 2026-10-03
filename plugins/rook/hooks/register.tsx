@@ -63,7 +63,7 @@ import {
   runArgs,
 } from './rook'
 import type { Approval, CliResult, ExploreRequest, GenerateRequest, ProfileRequest, ProjectRequest, RunRequest } from './rook'
-import { agentIdsOf, changesIn, countsOf, currentVerdicts, locate, readRun, RUN_ID, runIds } from './workspace'
+import { agentIdsOf, changesIn, countsOf, currentVerdicts, locate, projectDirName, readRun, ROOT, RUN_ID, runIds } from './workspace'
 import type { Io, Located, RowCache } from './workspace'
 
 /**
@@ -1161,6 +1161,28 @@ async function projectReply($: EngineInterface, ctx: Ctx, request: ProjectReques
  * agents and features, which takes minutes and spends credits. A workspace
  * that did not exist may afterwards, so the pane is re-read from scratch.
  */
+/** The agents rook has written for the selected project, with their feature counts: what explore actually produced. */
+async function agentsOnDisk($: EngineInterface, ctx: Ctx): Promise<{ id: string; features: number }[]> {
+  const io = ioOf($, ctx)
+  const facts = await diskFacts(io)
+  const projects = await io.list(`${ROOT}/projects`).catch(() => [])
+  const project = projectDirName(projects.filter(entry => entry.kind === 'dir').map(entry => entry.name), facts.projectId)
+
+  if (project === undefined) {
+    return []
+  }
+
+  const projectDir = `${ROOT}/projects/${project}`
+  const found: { id: string; features: number }[] = []
+
+  for (const id of await agentIdsOf(io, projectDir)) {
+    const features = (await io.list(`${projectDir}/agents/${id}/features`).catch(() => [])).filter(entry => entry.name.endsWith('.yaml')).length
+    found.push({ id, features })
+  }
+
+  return found
+}
+
 async function exploreRun($: EngineInterface, ctx: Ctx, request: ExploreRequest, signal?: AbortSignal): Promise<string> {
   const args = exploreArgs(request, ctx.approval)
 
@@ -1183,7 +1205,7 @@ async function exploreRun($: EngineInterface, ctx: Ctx, request: ExploreRequest,
       return `rook explore did not complete: ${problem}${/project/i.test(problem) ? ' (the rook project tool lists and selects projects)' : ''}`
     }
 
-    return exploreText(result.stdout ?? '')
+    return exploreText(result.stdout ?? '', await agentsOnDisk($, ctx))
   } finally {
     ctx.agentIndex = undefined // agents and features were written
     ctx.isDirty = true

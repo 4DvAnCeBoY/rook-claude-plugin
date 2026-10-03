@@ -459,15 +459,17 @@ export function projectsText(doc: unknown, stdout: string): string {
 }
 
 /**
- * What `rook explore` found, from its closing lines. Its `--json` prints no
- * document (the command writes its own prose), so the agent table, the
- * credits line and where it wrote are read back from stdout.
+ * What `rook explore` found. Which agents exist, and how many features each
+ * has, comes from the disk rook just wrote (`found`): its prose differs by
+ * version (a table on newer builds, a line per agent on older ones). The prose
+ * still gives the tally, where it wrote, and per-agent notes when it has them.
  */
-export function exploreText(stdout: string): string {
+export function exploreText(stdout: string, found?: readonly { id: string; features: number }[]): string {
   const lines = stdout.split('\n').map(line => line.trimEnd())
   const header = lines.findIndex(line => /^\s*AGENT\s+FEATURES\s+FINDINGS/.test(line))
-  const agents: string[] = []
+  const notes = new Map<string, string>()
 
+  // the table a newer rook prints: AGENT  FEATURES  FINDINGS  WORST  NOTE
   for (let at = header < 0 ? lines.length : header + 1; at < lines.length; at += 1) {
     const line = lines[at]!.trim()
 
@@ -480,21 +482,32 @@ export function exploreText(stdout: string): string {
     }
 
     const [agent = '?', features = '—', findings = '—', worst = '—', note] = line.split(/\s{2,}/)
-    agents.push(
-      `  ${agent} — ${features} features · ${findings} findings${worst !== '—' ? ` (worst ${worst})` : ''}${note ? ` · ${note}` : ''}`,
-    )
+    notes.set(agent, `${features} features · ${findings} findings${worst !== '—' ? ` (worst ${worst})` : ''}${note ? ` · ${note}` : ''}`)
   }
 
+  // the line an older rook prints per agent it skipped: `<id>: unchanged, not re-analysed`
+  for (const line of lines) {
+    const skipped = /^\s*([A-Za-z0-9][\w.-]*): (unchanged, not re-analysed)\s*$/.exec(line)
+
+    if (skipped && !notes.has(skipped[1]!)) {
+      notes.set(skipped[1]!, skipped[2]!)
+    }
+  }
+
+  const agents = found !== undefined
+    ? found.map(agent => `  ${agent.id} — ${notes.get(agent.id) ?? `${plural(agent.features, 'feature')}`}`)
+    : [...notes.entries()].map(([id, note]) => `  ${id} — ${note}`)
   const said = (pattern: RegExp) => lines.map(line => line.trim()).find(line => pattern.test(line))
   const tally = said(/^\d+ analysed, \d+ unchanged|^nothing changed —/)
   const written = said(/^written: /)
   const active = said(/^active agent: |agents registered — none selected/)
 
-  if (agents.length === 0 && tally === undefined) {
-    return (
-      'rook explore found no agents in this repository.' +
-      " Try again with an instruction saying where the agent lives (e.g. 'the support bot under services/support')."
-    )
+  if (agents.length === 0) {
+    return [
+      `rook explore found no agent in this repository${tally ? ` (${tally})` : ''}.`,
+      "rook recognises an agent by its model calls. If the agent here receives its model from elsewhere, or lives in an unusual place, " +
+        "re-run the rook explore tool with an instruction naming the file and entry point (e.g. 'the support agent in src/agent.ts, entry point handle'). It spends credits again.",
+    ].join('\n')
   }
 
   return [
@@ -536,6 +549,8 @@ export function profileTestText(profile: string | undefined, exitCode: number, s
     return `rook profile test (${name}) — the agent answered:\n${excerpt(kept, 2500)}`
   }
 
+  // ROOK_* variables are rook's to supply (ROOK_STATE_DIR, ROOK_SCENARIO_ID…): missing, it is rook's gap, not the person's.
+  const rookOwned = /\bROOK_[A-Z_]+\b(?=[^\n]*\b(required|missing|not set|undefined)\b)/.exec(stderr)
   const said = stderr
     .split('\n')
     .map(line => line.trimEnd())
@@ -545,7 +560,12 @@ export function profileTestText(profile: string | undefined, exitCode: number, s
   return [
     `rook profile test (${name}) failed${exitCode === 130 ? ' (interrupted)' : ''}:`,
     ...(said.length > 0 ? said.map(line => `  ${clip(line, 300)}`) : [`  rook exited ${exitCode}`]),
-    'A missing variable: ask the person to run `! rook env set NAME <value>`. A script that is wrong: `! rook profile fix <id>` repairs it (spends credits).',
+    ...(rookOwned
+      ? [
+          `${rookOwned[0]} is a variable rook hands the profile's scripts itself, not one to set: this rook build did not pass it to a profile test. ` +
+            'Ask the person to update rook (`! rook update`), or check the profile with a one-scenario run instead. Do not set it with rook env set or edit the script.',
+        ]
+      : ['A missing variable: ask the person to run `! rook env set NAME <value>`. A script that is wrong: `! rook profile fix <id>` repairs it (spends credits).']),
   ].join('\n')
 }
 
