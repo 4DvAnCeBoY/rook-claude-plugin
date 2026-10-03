@@ -19,8 +19,10 @@ export type World = {
   /** argv of every rook invocation */
   invocations: string[][]
   /** What the fake `rook run` does: write files, then print this document. */
-  onRun: (argv: readonly string[]) => { stdout: string; code: number; writes?: Record<string, string> }
+  onRun: (argv: readonly string[]) => { stdout: string; code: number; stderr?: string; writes?: Record<string, string> }
   status: { stdout: string; code: number }
+  /** A per-argv answer for a short command; `status` answers whatever this leaves undefined. */
+  answer: (argv: readonly string[]) => { stdout: string; code: number; stderr?: string } | undefined
   /** When set, `$.process` cannot start the binary at all. */
   isMissingBinary: boolean
   /** Called while a spawned rook is running, before it prints. */
@@ -42,6 +44,7 @@ export function worldOf(on: On, files: Readonly<Record<string, string>>, env: Re
     invocations: [],
     onRun: () => ({ stdout: JSON.stringify({ ok: true, halted: false, credits: 0 }), code: 0 }),
     status: { stdout: JSON.stringify({ project_id: 'P', offline: false, agents: [] }), code: 0 },
+    answer: () => undefined,
     isMissingBinary: false,
     during: undefined,
   }
@@ -76,8 +79,9 @@ export function worldOf(on: On, files: Readonly<Record<string, string>>, env: Re
     }
 
     world.invocations.push([...e.argv])
+    const ran: { stdout: string; code: number; stderr?: string } = world.answer(e.argv) ?? world.status
 
-    return { value: { exitCode: world.status.code, stdout: world.status.stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    return { value: { exitCode: ran.code, stdout: ran.stdout, stderr: ran.stderr ?? '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
 
   on('process.spawn', async function* ($, e) {
@@ -90,6 +94,9 @@ export function worldOf(on: On, files: Readonly<Record<string, string>>, env: Re
 
     await world.during?.()
     yield { stream: 'stderr' as const, text: 'running…\n' }
+    if (ran.stderr !== undefined) {
+      yield { stream: 'stderr' as const, text: ran.stderr }
+    }
     if (ran.stdout !== '') {
       yield { stream: 'stdout' as const, text: ran.stdout }
     }

@@ -343,7 +343,7 @@ export function parseGenerateFlags(text: string): GenerateRequest | { error: str
 
 export const CLI_ENV = { NO_COLOR: '1', FORCE_COLOR: '0' }
 
-export type CliResult = { exitCode: number; doc: unknown; stderr: string }
+export type CliResult = { exitCode: number; doc: unknown; stderr: string; stdout?: string }
 
 /** The one JSON document a `--json` command prints, or undefined when it printed prose. */
 export function jsonOf(stdout: string): unknown {
@@ -387,4 +387,101 @@ export function failureOf(result: CliResult): string | undefined {
   const last = result.stderr.trim().split('\n').filter(Boolean).pop()
 
   return `${said ?? last ?? `rook exited ${result.exitCode}`}${doc?.remedy ? ` (remedy: ${doc.remedy})` : ''}`
+}
+
+// ── setup from inside Claude Code: project, explore, profile ────────────────
+
+/** rook project ids are ULIDs: 26 characters of Crockford base32. */
+const PROJECT_ID = /^[0-9A-HJKMNP-TV-Z]{26}$/
+
+export type ProjectRequest = { action?: 'list' | 'use' | 'create'; id?: string; name?: string }
+
+/**
+ * `rook project` lists (there is no `list` subcommand), `use <id>` selects,
+ * `create <name>` creates and selects. Only the listing takes `--json`, and a
+ * rook from before it did refuses the flag, so the caller falls back to the
+ * plain listing.
+ */
+export function projectArgs(request: ProjectRequest): { argv: string[] } | { error: string } {
+  switch (request.action ?? 'list') {
+    case 'list':
+      return { argv: ['project', '--json'] }
+    case 'use': {
+      // Upper-cased: rook compares ids exactly, and a ULID is upper case.
+      const id = typeof request.id === 'string' ? request.id.trim().toUpperCase() : ''
+
+      return PROJECT_ID.test(id) ? { argv: ['project', 'use', id] } : { error: 'id must be a rook project id (26 characters, 01M0SG9C0FKZHP1B6JWJ05B9DD form)' }
+    }
+    case 'create': {
+      const name = typeof request.name === 'string' ? request.name.replace(/\s+/g, ' ').trim() : ''
+
+      return printable(name, 120) ? { argv: ['project', 'create', name] } : { error: 'name must be 1-120 printable characters and not start with -' }
+    }
+    default:
+      return { error: 'action must be list, use or create' }
+  }
+}
+
+export type ExploreRequest = { force?: boolean; instruction?: string }
+
+/** `rook explore .`: find the agents in this repository and write their features. */
+export function exploreArgs(request: ExploreRequest, approval: Approval = { allowRules: [] }): { argv: string[] } | { error: string } {
+  const argv = ['explore', '.', ...approvalArgs(approval), '--json', ...(request.force === true ? ['--force'] : [])]
+  const tail = instructionArgs(request.instruction)
+
+  return 'error' in tail ? tail : { argv: [...argv, ...tail] }
+}
+
+export type ProfileRequest = { action?: 'list' | 'test' | 'use'; profile?: string; goal?: string }
+
+/**
+ * `rook profile` lists the active agent's profiles, `profile use <id>` makes
+ * one active, `profile test [id]` calls the agent once through it. `profile
+ * add` is not here: it needs connection details only the person has.
+ */
+export function profileArgs(request: ProfileRequest, approval: Approval = { allowRules: [] }): { argv: string[] } | { error: string } {
+  const { profile } = request
+
+  if (profile !== undefined && (typeof profile !== 'string' || !PROFILE.test(profile) || profile.startsWith('-'))) {
+    return { error: 'profile must be a profile id: letters, digits, ., - or _' }
+  }
+
+  switch (request.action ?? 'test') {
+    case 'list':
+      return { argv: ['profile'] }
+    case 'use':
+      return profile === undefined ? { error: 'use needs the id of the profile to make active' } : { argv: ['profile', 'use', profile] }
+    case 'test': {
+      const argv = ['profile', 'test', ...(profile === undefined ? [] : [profile]), ...approvalArgs(approval), '--json']
+
+      if (request.goal === undefined) {
+        return { argv }
+      }
+
+      const goal = typeof request.goal === 'string' ? request.goal.replace(/\s+/g, ' ').trim() : ''
+
+      return printable(goal, 500) ? { argv: [...argv, '--goal', goal] } : { error: 'goal must be 1-500 printable characters and not start with -' }
+    }
+    default:
+      return { error: 'action must be list, test or use' }
+  }
+}
+
+/** `/rook explore --force -- the billing agent` → a request. */
+export function parseExploreFlags(text: string): ExploreRequest | { error: string } {
+  const dashes = text.search(/(^|\s)--(\s|$)/)
+  const head = dashes < 0 ? text : text.slice(0, dashes)
+  const instruction = dashes < 0 ? '' : text.slice(dashes).replace(/^\s*--/, '').trim()
+  const words = head.trim() === '' ? [] : head.trim().split(/\s+/)
+  const request: ExploreRequest = instruction === '' ? {} : { instruction }
+
+  for (const word of words) {
+    if (word !== '--force') {
+      return { error: `unknown explore option: ${word}. Use --force · -- <what to look for>` }
+    }
+
+    request.force = true
+  }
+
+  return request
 }

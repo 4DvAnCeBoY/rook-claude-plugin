@@ -1,9 +1,13 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import {
+  exploreText,
   failureContext,
   generateText,
+  profilesText,
+  profileTestText,
   progressBar,
+  projectsText,
   retestPrompt,
   runSummary,
   scenariosText,
@@ -14,7 +18,7 @@ import {
 } from '../hooks/format'
 import { assess, declaredVariables, isRunCommand, markersOf } from '../hooks/guard'
 import { impactOf, indexAgent, relativeTo } from '../hooks/impact'
-import { allowRulesOf, failureOf, generateArgs, jsonOf, parseGenerateFlags, parseRunFlags, runArgs } from '../hooks/rook'
+import { allowRulesOf, exploreArgs, failureOf, generateArgs, jsonOf, parseExploreFlags, parseGenerateFlags, parseRunFlags, profileArgs, projectArgs, runArgs } from '../hooks/rook'
 import { changesIn, compareRunIds, currentVerdicts, locate, readRun, remedyFile, runIds } from '../hooks/workspace'
 import type { Io } from '../hooks/workspace'
 import { parseYaml } from '../hooks/yaml'
@@ -323,6 +327,47 @@ describe('rook CLI', () => {
     expect(parseGenerateFlags('--allow x')).toHaveProperty('error')
   })
 
+  test('project: list, use a ULID, create a printable name; nothing else reaches argv', () => {
+    expect(projectArgs({})).toEqual({ argv: ['project', '--json'] })
+    expect(projectArgs({ action: 'use', id: '01m0sg9c0fkzhp1b6jwj05b9dd' })).toEqual({ argv: ['project', 'use', '01M0SG9C0FKZHP1B6JWJ05B9DD'] })
+    expect(projectArgs({ action: 'create', name: '  Support   bot ' })).toEqual({ argv: ['project', 'create', 'Support bot'] })
+    expect(projectArgs({ action: 'use', id: '--yes' })).toHaveProperty('error')
+    expect(projectArgs({ action: 'use', id: '01M0SG9C0FKZHP1B6JWJ05B9D; rm -rf /' })).toHaveProperty('error')
+    expect(projectArgs({ action: 'use', id: '01M0SG9C0FKZHP1B6JWJ05B9DU' })).toHaveProperty('error') // U is not Crockford base32
+    expect(projectArgs({ action: 'use' })).toHaveProperty('error')
+    expect(projectArgs({ action: 'create', name: '--help' })).toHaveProperty('error')
+    expect(projectArgs({ action: 'create', name: 'a\u0007b' })).toHaveProperty('error')
+    expect(projectArgs({ action: 'create', name: 'x'.repeat(121) })).toHaveProperty('error')
+    expect(projectArgs({ action: 'delete' as never })).toHaveProperty('error')
+  })
+
+  test('explore: rook explore . with the approvals, --force, and the instruction after --', () => {
+    expect(exploreArgs({})).toEqual({ argv: ['explore', '.', '--yes', '--json'] })
+    expect(exploreArgs({ force: true, instruction: 'the bot under --services' }, { allowRules: ['bash(git *)'] })).toEqual({
+      argv: ['explore', '.', '--allow', 'bash(git *)', '--json', '--force', '--', 'the bot under --services'],
+    })
+    expect(exploreArgs({ instruction: 'a\u0000b' })).toHaveProperty('error')
+    expect(parseExploreFlags('--force -- the support bot')).toEqual({ force: true, instruction: 'the support bot' })
+    expect(parseExploreFlags('')).toEqual({})
+    expect(parseExploreFlags('../elsewhere')).toHaveProperty('error')
+    expect(parseExploreFlags('--yes')).toHaveProperty('error')
+  })
+
+  test('profile: list, use, test with a goal; ids and goals are checked', () => {
+    expect(profileArgs({ action: 'list' })).toEqual({ argv: ['profile'] })
+    expect(profileArgs({ action: 'use', profile: 'staging' })).toEqual({ argv: ['profile', 'use', 'staging'] })
+    expect(profileArgs({})).toEqual({ argv: ['profile', 'test', '--yes', '--json'] })
+    expect(profileArgs({ profile: 'local', goal: 'What is  your refund policy?' }, { allowRules: ['bash(npm start)'] })).toEqual({
+      argv: ['profile', 'test', 'local', '--allow', 'bash(npm start)', '--json', '--goal', 'What is your refund policy?'],
+    })
+    expect(profileArgs({ action: 'use' })).toHaveProperty('error')
+    expect(profileArgs({ profile: '--from=/etc/passwd' })).toHaveProperty('error')
+    expect(profileArgs({ profile: 'a b' })).toHaveProperty('error')
+    expect(profileArgs({ goal: '--yes' })).toHaveProperty('error')
+    expect(profileArgs({ goal: 'x'.repeat(501) })).toHaveProperty('error')
+    expect(profileArgs({ action: 'add' as never })).toHaveProperty('error')
+  })
+
   test('/rook run flags parse, and unknown ones are refused', () => {
     expect(parseRunFlags('--only SC-001,SC-002 --class=adversarial --test')).toEqual({ only: ['SC-001', 'SC-002'], class: 'adversarial', test: true })
     expect(parseRunFlags('SC-004 SC-007')).toEqual({ only: ['SC-004', 'SC-007'] })
@@ -510,6 +555,66 @@ describe('format', () => {
         '  commercecare · v4 · tree ahead · scenarios 1 added, 2 changed · 1 runs owed upstream',
         '  runs: 10',
         '  last: 2026-09-28T15-54-56Z "jailbreak" completed — 0 Pass · 0 Fail · 1 Unable to Verify · 22.18 credits',
+      ].join('\n'),
+    )
+  })
+})
+
+describe('format · setup', () => {
+  test('projects from rook project --json, and from the plain listing of an older rook', () => {
+    const doc = { ok: true, projects: [{ project_id: '01M0SG9C0FKZHP1B6JWJ05B9DD', name: 'Demo', active: true }], partial: null }
+
+    expect(projectsText(doc, '')).toBe('rook projects (1) · active: Demo\n* 01M0SG9C0FKZHP1B6JWJ05B9DD  Demo')
+    expect(projectsText(undefined, '  01M0SG9C0FKZHP1B6JWJ05B9DD  Demo\n  01M0X0421W5KX1R4866Y5Y9YAE  SF-DEMO\n\n  rook project use <id>\n')).toBe(
+      [
+        'rook projects (2) · none selected',
+        '  01M0SG9C0FKZHP1B6JWJ05B9DD  Demo',
+        '  01M0X0421W5KX1R4866Y5Y9YAE  SF-DEMO',
+        'Select one with the rook project tool (action use, its id), or /rook project use <id>. explore and generate need one.',
+      ].join('\n'),
+    )
+    expect(projectsText({ ok: true, projects: [], partial: null }, '')).toContain('no rook projects')
+  })
+
+  test("explore's closing table, tally and where it wrote, read back from its prose", () => {
+    const stdout = [
+      'reading the tree…',
+      '',
+      '▸ agents analysed',
+      '  AGENT         FEATURES  FINDINGS  WORST  NOTE',
+      '  ────────────  ────────  ────────  ─────  ────',
+      '  refund-desk   6         2         high',
+      '  triage        3         0         —      unchanged, not re-analysed',
+      '',
+      '1 analysed, 1 unchanged, 3.40 credits',
+      'written: .testmuai/rook/agents/refund-desk/',
+      '2 agents registered — none selected; pass --agent or run `rook agent use <id>`',
+      'on disk only — nothing has been recorded upstream',
+    ].join('\n')
+
+    expect(exploreText(stdout).split('\n').slice(0, 5)).toEqual([
+      'rook explore: 2 agents — 1 analysed, 1 unchanged, 3.40 credits',
+      '  refund-desk — 6 features · 2 findings (worst high)',
+      '  triage — 3 features · 0 findings · unchanged, not re-analysed',
+      '  written: .testmuai/rook/agents/refund-desk/',
+      '  2 agents registered — none selected; pass --agent or run `rook agent use <id>`',
+    ])
+    expect(exploreText(stdout)).toContain('! rook profile add <name> --from connection.md')
+    expect(exploreText('▸ agents analysed — none yet\n')).toContain('found no agents')
+  })
+
+  test('profiles and profile tests, as rook printed them', () => {
+    expect(profilesText(' * local                open,execute  Local dev\n   staging              execute  Staging   unverified\n')).toContain('* local')
+    expect(profilesText('  none — rook profile add\n')).toContain('! rook profile add')
+    expect(profileTestText('local', 0, 'local: answered in 120ms — verified\n\nHello!\n\n  next:  rook run         run the scenarios\n         rook sync       record\n', '')).toBe(
+      'rook profile test (local) — the agent answered:\nlocal: answered in 120ms — verified\n\nHello!',
+    )
+    expect(profileTestText(undefined, 1, '', 'running…\nlocal: not set on this machine — API_KEY\n  rook env set API_KEY <value>\n')).toBe(
+      [
+        'rook profile test (the active profile) failed:',
+        '  local: not set on this machine — API_KEY',
+        '  rook env set API_KEY <value>',
+        'A missing variable: ask the person to run `! rook env set NAME <value>`. A script that is wrong: `! rook profile fix <id>` repairs it (spends credits).',
       ].join('\n'),
     )
   })

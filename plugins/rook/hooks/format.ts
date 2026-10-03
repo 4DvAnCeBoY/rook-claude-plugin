@@ -411,3 +411,129 @@ export function generateText(doc: unknown): string {
     ...(written.length > 0 ? ['Run the new scenarios with the rook run tool; the rook scenarios tool lists their ids.'] : []),
   ].join('\n')
 }
+
+// ── setup: project, explore, profile ─────────────────────────────────────────
+
+/** `rook profile add` needs the agent's connection details, which only the person has, and it can prompt: theirs to run. */
+export const PROFILE_ADD_HINT =
+  'A profile tells rook how to reach the agent, and only the person has those details: ask them to type ' +
+  "`! rook profile add <name> --from connection.md` (a file with a curl, a spec or notes) or `! rook profile add <name> --command '<how the agent starts>'`. " +
+  'rook writes the script, calls the agent once and keeps the profile if it answered.'
+
+/** `rook project --json` (`{ projects: [{ project_id, name, active }] }`), or the plain listing an older rook prints. */
+export function projectsText(doc: unknown, stdout: string): string {
+  type Row = { project_id?: string; name?: string; active?: boolean }
+  const listed = (doc as { projects?: Row[]; partial?: string | null } | undefined)?.projects
+  const rows: Row[] = Array.isArray(listed)
+    ? listed
+    : stdout
+        .split('\n')
+        .map(line => /^([* ]) ([0-9A-Z]{26}) {2}(.+)$/.exec(line))
+        .filter(match => match !== null)
+        .map(match => ({ project_id: match[2], name: match[3]!.trim(), active: match[1] === '*' }))
+  const partial = (doc as { partial?: string | null } | undefined)?.partial
+
+  if (rows.length === 0) {
+    return 'rook: no rook projects in this organisation yet. Create one with the rook project tool (action create, a name), or /rook project create <name>.'
+  }
+
+  const active = rows.find(row => row.active)
+
+  return [
+    `rook projects (${rows.length}${partial ? ', list incomplete' : ''})${active ? ` · active: ${active.name ?? active.project_id}` : ' · none selected'}`,
+    ...rows.slice(0, 60).map(row => `${row.active ? '*' : ' '} ${row.project_id ?? '?'}  ${clip(row.name ?? '', 80)}`),
+    ...(rows.length > 60 ? [`  …and ${rows.length - 60} more`] : []),
+    ...(active ? [] : ['Select one with the rook project tool (action use, its id), or /rook project use <id>. explore and generate need one.']),
+  ].join('\n')
+}
+
+/**
+ * What `rook explore` found, from its closing lines. Its `--json` prints no
+ * document (the command writes its own prose), so the agent table, the
+ * credits line and where it wrote are read back from stdout.
+ */
+export function exploreText(stdout: string): string {
+  const lines = stdout.split('\n').map(line => line.trimEnd())
+  const header = lines.findIndex(line => /^\s*AGENT\s+FEATURES\s+FINDINGS/.test(line))
+  const agents: string[] = []
+
+  for (let at = header < 0 ? lines.length : header + 1; at < lines.length; at += 1) {
+    const line = lines[at]!.trim()
+
+    if (line === '') {
+      break
+    }
+
+    if (/^─/.test(line)) {
+      continue
+    }
+
+    const [agent = '?', features = '—', findings = '—', worst = '—', note] = line.split(/\s{2,}/)
+    agents.push(
+      `  ${agent} — ${features} features · ${findings} findings${worst !== '—' ? ` (worst ${worst})` : ''}${note ? ` · ${note}` : ''}`,
+    )
+  }
+
+  const said = (pattern: RegExp) => lines.map(line => line.trim()).find(line => pattern.test(line))
+  const tally = said(/^\d+ analysed, \d+ unchanged|^nothing changed —/)
+  const written = said(/^written: /)
+  const active = said(/^active agent: |agents registered — none selected/)
+
+  if (agents.length === 0 && tally === undefined) {
+    return (
+      'rook explore found no agents in this repository.' +
+      " Try again with an instruction saying where the agent lives (e.g. 'the support bot under services/support')."
+    )
+  }
+
+  return [
+    `rook explore: ${plural(agents.length, 'agent')}${tally ? ` — ${tally}` : ''}`,
+    ...agents,
+    ...[written, active].filter((line): line is string => line !== undefined).map(line => `  ${line}`),
+    'Next: write scenarios with the rook generate tool. Before a run the agent needs a profile. ' + PROFILE_ADD_HINT,
+  ].join('\n')
+}
+
+/** `rook profile`: a plain listing (`* id  phases  name  unverified  needs VAR`), handed on as rook printed it. */
+export function profilesText(stdout: string): string {
+  const listing = stdout.replace(/\n{2,}/g, '\n').trimEnd()
+
+  if (listing.trim() === '' || /none — rook profile add/.test(listing)) {
+    return `rook: the active agent has no profiles yet. ${PROFILE_ADD_HINT}`
+  }
+
+  return [
+    "rook profiles of the active agent (* is active; an unverified one cannot run until it passes a profile test; 'needs' names variables not set here):",
+    excerpt(listing, 4000),
+  ].join('\n')
+}
+
+/**
+ * `rook profile test`: one call to the agent. rook says what came back in
+ * prose (its `--json` prints no document): the verdict line and the reply on
+ * stdout, what went wrong on stderr.
+ */
+export function profileTestText(profile: string | undefined, exitCode: number, stdout: string, stderr: string): string {
+  const name = profile ?? 'the active profile'
+
+  if (exitCode === 0) {
+    const kept = stdout
+      .split('\n')
+      .filter(line => !/^\s*(next:|rook sync|rook run)\s/.test(line))
+      .join('\n')
+
+    return `rook profile test (${name}) — the agent answered:\n${excerpt(kept, 2500)}`
+  }
+
+  const said = stderr
+    .split('\n')
+    .map(line => line.trimEnd())
+    .filter(line => line.trim() !== '' && line.trim() !== 'running…')
+    .slice(-10)
+
+  return [
+    `rook profile test (${name}) failed${exitCode === 130 ? ' (interrupted)' : ''}:`,
+    ...(said.length > 0 ? said.map(line => `  ${clip(line, 300)}`) : [`  rook exited ${exitCode}`]),
+    'A missing variable: ask the person to run `! rook env set NAME <value>`. A script that is wrong: `! rook profile fix <id>` repairs it (spends credits).',
+  ].join('\n')
+}

@@ -9,6 +9,7 @@ import {
   creditsPerScenario,
   duration,
   excerpt,
+  exploreText,
   failureContext,
   failureNote,
   gapText,
@@ -17,7 +18,10 @@ import {
   isReporting,
   metricsLine,
   orderedClusters,
+  profilesText,
+  profileTestText,
   progressBar,
+  projectsText,
   reasonText,
   REPORTING,
   retestPrompt,
@@ -32,8 +36,8 @@ import {
 import { assess, declaredVariables, isRunCommand } from './guard'
 import { impactOf, indexAgent, relativeTo } from './impact'
 import type { AgentIndex } from './impact'
-import { allowRulesOf, CLI_ENV, failureOf, generateArgs, jsonOf, parseGenerateFlags, parseRunFlags, runArgs } from './rook'
-import type { Approval, CliResult, GenerateRequest, RunRequest } from './rook'
+import { allowRulesOf, CLI_ENV, exploreArgs, failureOf, generateArgs, jsonOf, parseExploreFlags, parseGenerateFlags, parseRunFlags, profileArgs, projectArgs, runArgs } from './rook'
+import type { Approval, CliResult, ExploreRequest, GenerateRequest, ProfileRequest, ProjectRequest, RunRequest } from './rook'
 import { changesIn, countsOf, currentVerdicts, locate, readRun, RUN_ID, runIds } from './workspace'
 import type { Io, Located, RowCache } from './workspace'
 
@@ -42,7 +46,9 @@ import type { Io, Located, RowCache } from './workspace'
  *
  *  1. Tools the model calls — `run`, `report`, `status`, `scenarios`,
  *     `generate` — so Claude can test the agent it is building, read rook's
- *     evidence and root-cause clusters back, and write scenarios for it.
+ *     evidence and root-cause clusters back, and write scenarios for it;
+ *     `project`, `explore`, `profile_test` so a repository with no rook
+ *     setup gets one without leaving Claude Code.
  *  2. A live pane: every scenario's latest verdict, the run in flight lane by
  *     lane, clusters with rook's remedies, failures you can open, and what
  *     nobody looked at. The turn's spinner carries the run's progress too.
@@ -51,8 +57,8 @@ import type { Io, Located, RowCache } from './workspace'
  *  4. Failures of a run started elsewhere handed to Claude as context.
  *  5. A status line score over every scenario's latest verdict, with what the
  *     latest run fixed or regressed.
- *  6. `/rook` — pane, status, report, explain, run, scenarios, generate, ui,
- *     confirm-prod.
+ *  6. `/rook` — pane, status, report, explain, run, scenarios, generate,
+ *     project, explore, profile, ui, confirm-prod.
  *  7. A guard that refuses runs against a production-looking target until
  *     the person confirms.
  *
@@ -83,6 +89,9 @@ const REPORT_TOOL = /^mcp__rook__report$/
 const STATUS_TOOL = /^mcp__rook__status$/
 const SCENARIOS_TOOL = /^mcp__rook__scenarios$/
 const GENERATE_TOOL = /^mcp__rook__generate$/
+const PROJECT_TOOL = /^mcp__rook__project$/
+const EXPLORE_TOOL = /^mcp__rook__explore$/
+const PROFILE_TOOL = /^mcp__rook__profile_test$/
 /** Every tool that writes a file; MultiEdit exists on some builds only. */
 const EDIT_TOOLS = /^(Edit|Write|MultiEdit|NotebookEdit)$/
 
@@ -95,10 +104,13 @@ const USAGE = [
   '/rook run [--only SC-001,SC-002] [--class …] [--category …] [--tag …] [--profile …] [--name …]',
   '          [--concurrency 1-8] [--resume <run>] [--run <run> --phases collect,judge] [--test] [--rca] [-- <instruction>]',
   '/rook generate [--total N] [--class …] [--category …] [--force] [-- <what to cover>]',
+  '/rook project [list|use <id>|create <name>]  the rook project this workspace records to',
+  "/rook explore [--force] [-- <instruction>]   read this repository: find the agents, write their features",
+  '/rook profile [list|use <id>|test [id] [-- <goal>]]  how rook reaches the agent (add one: ! rook profile add …)',
   '/rook ui              open the on-disk results viewer (rook ui --local)',
   '/rook confirm-prod [profile]  allow runs against a production-looking target for 15 minutes',
   '',
-  "Runs and generate approve rook's own tool calls with --yes, unless allowRules is set in /config.",
+  "Runs, generate, explore and profile test approve rook's own tool calls with --yes, unless allowRules is set in /config.",
 ].join('\n')
 
 /** The options and the caches of one load of the module; what a drawing reads lives in $.state. */
@@ -152,7 +164,7 @@ async function rookJson($: EngineInterface, ctx: Ctx, args: string[]): Promise<C
   try {
     const ran = await $.process.run([ctx.bin, ...args], { env: CLI_ENV, stdin: '', timeoutMs: 60_000, ...(ctx.cwd !== '' && { cwd: ctx.cwd }) })
 
-    return { exitCode: ran.exitCode, doc: jsonOf(ran.stdout), stderr: ran.stderr }
+    return { exitCode: ran.exitCode, doc: jsonOf(ran.stdout), stderr: ran.stderr, stdout: ran.stdout }
   } catch (error) {
     return { exitCode: 1, doc: undefined, stderr: `could not run ${ctx.bin}: ${String(error)}` }
   }
@@ -180,7 +192,7 @@ async function rookRun($: EngineInterface, ctx: Ctx, argv: string[], signal?: Ab
     if (step.done) {
       const ended = step.value as { code: number | null } | undefined
 
-      return { exitCode: ended?.code ?? 1, doc: jsonOf(stdout), stderr }
+      return { exitCode: ended?.code ?? 1, doc: jsonOf(stdout), stderr, stdout }
     }
 
     if (step.value.stream === 'stdout') {
@@ -786,6 +798,64 @@ async function rookCommand($: EngineInterface, ctx: Ctx, e: CommandRunInput): Pr
 
       return { text: 'rook: generating scenarios in the background. A toast says when they are written; /rook scenarios lists them.' }
     }
+    case 'project': {
+      const [action = 'list', ...words] = rest
+
+      if (action !== 'list' && action !== 'use' && action !== 'create') {
+        return { text: 'rook: /rook project [list|use <id>|create <name>]' }
+      }
+
+      return { text: await projectReply($, ctx, action === 'use' ? { action, id: words[0] ?? '' } : action === 'create' ? { action, name: words.join(' ') } : { action }) }
+    }
+    case 'explore': {
+      const request = parseExploreFlags(tail)
+
+      if ('error' in request) {
+        return { text: `rook: ${request.error}` }
+      }
+
+      $.clock.after(0, async () => $.ui.toast(clip(await exploreRun($, ctx, request).catch(error => `rook explore failed: ${String(error)}`), 300)))
+
+      return { text: 'rook: exploring this repository in the background (minutes, spends credits). A toast says what it found; the pane picks the agent up.' }
+    }
+    case 'profile': {
+      const [action = 'list', id] = rest
+      const after = tail.slice(action.length).trim()
+      const dashes = after.search(/(^|\s)--(\s|$)/)
+      const goal = dashes < 0 ? '' : after.slice(dashes).replace(/^\s*--/, '').trim()
+
+      if (action === 'add') {
+        return { text: 'rook: profile add asks for connection details: type `! rook profile add <name> --from connection.md` (or --command \'<how the agent starts>\').' }
+      }
+
+      if (action !== 'list' && action !== 'use' && action !== 'test') {
+        return { text: 'rook: /rook profile [list|use <id>|test [id] [-- <goal>]]' }
+      }
+
+      const request: ProfileRequest = { action, ...(id !== undefined && id !== '--' && { profile: id }), ...(goal !== '' && { goal }) }
+
+      if (action !== 'test') {
+        const answer = await profileReply($, ctx, request)
+
+        return { text: 'deny' in answer ? answer.deny : answer.result }
+      }
+
+      // Checked before going to the background, so a refusal shows here and not in a toast.
+      const args = profileArgs(request, ctx.approval)
+      const blocked = 'error' in args ? `rook: ${args.error}` : await prodBlock($, ctx, request.profile)
+
+      if (blocked !== undefined) {
+        return { text: blocked }
+      }
+
+      $.clock.after(0, async () => {
+        const answer = await profileReply($, ctx, request).catch(error => ({ deny: `rook profile test failed: ${String(error)}` }))
+
+        $.ui.toast(clip('deny' in answer ? answer.deny : answer.result, 300))
+      })
+
+      return { text: `rook: testing ${request.profile ?? 'the active profile'} in the background: one call to the agent. A toast says what came back.` }
+    }
     case 'ui':
     case 'viewer': {
       const url = await startViewer($, ctx)
@@ -818,6 +888,110 @@ async function rookCommand($: EngineInterface, ctx: Ctx, e: CommandRunInput): Pr
     }
     default:
       return { text: USAGE }
+  }
+}
+
+// ── setup from inside Claude Code: project, explore, profile ────────────────
+
+/** `rook project`, `project use <id>`, `project create <name>`: no credits, no agent call. */
+async function projectReply($: EngineInterface, ctx: Ctx, request: ProjectRequest): Promise<string> {
+  const args = projectArgs(request)
+
+  if ('error' in args) {
+    return `rook: ${args.error}`
+  }
+
+  if (args.argv[1] === '--json') {
+    let listed = await rookJson($, ctx, args.argv)
+
+    // A rook from before `project --json` refuses the flag; its plain listing carries the same rows.
+    if (listed.doc === undefined && /unknown option/i.test(listed.stderr)) {
+      listed = await rookJson($, ctx, ['project'])
+    }
+
+    const problem = failureOf(listed)
+
+    return problem === undefined ? projectsText(listed.doc, listed.stdout ?? '') : `rook project failed: ${problem}`
+  }
+
+  const ran = await rookJson($, ctx, args.argv)
+  const problem = failureOf(ran)
+
+  ctx.isDirty = true
+  await poll($, ctx)
+
+  return problem === undefined ? `rook: ${clip(ran.stdout?.trim() || 'done', 300)}` : `rook project ${args.argv[1]} failed: ${problem}`
+}
+
+/**
+ * `rook explore .`, streamed like a run: it reads the codebase and writes
+ * agents and features, which takes minutes and spends credits. A workspace
+ * that did not exist may afterwards, so the pane is re-read from scratch.
+ */
+async function exploreRun($: EngineInterface, ctx: Ctx, request: ExploreRequest, signal?: AbortSignal): Promise<string> {
+  const args = exploreArgs(request, ctx.approval)
+
+  if ('error' in args) {
+    return `rook: ${args.error}`
+  }
+
+  try {
+    const result = await rookRun($, ctx, args.argv, signal)
+
+    if (result.exitCode !== 0) {
+      const problem = failureOf(result) ?? `rook exited ${result.exitCode}`
+
+      return `rook explore did not complete: ${problem}${/project/i.test(problem) ? ' (the rook project tool lists and selects projects)' : ''}`
+    }
+
+    return exploreText(result.stdout ?? '')
+  } finally {
+    ctx.agentIndex = undefined // agents and features were written
+    ctx.isDirty = true
+    await poll($, ctx)
+  }
+}
+
+/**
+ * `rook profile` (list), `profile use <id>`, `profile test [id]`. A test calls
+ * the real agent through the profile, so the production guard applies to the
+ * profile being tested.
+ */
+async function profileReply($: EngineInterface, ctx: Ctx, request: ProfileRequest, signal?: AbortSignal): Promise<{ result: string } | { deny: string }> {
+  const args = profileArgs(request, ctx.approval)
+
+  if ('error' in args) {
+    return { deny: `rook: ${args.error}` }
+  }
+
+  if (args.argv[1] === undefined) {
+    const listed = await rookJson($, ctx, args.argv)
+
+    return { result: listed.exitCode === 0 ? profilesText(listed.stdout ?? '') : `rook profile failed: ${failureOf(listed) ?? `rook exited ${listed.exitCode}`}` }
+  }
+
+  if (args.argv[1] === 'use') {
+    const ran = await rookJson($, ctx, args.argv)
+
+    ctx.isDirty = true
+    await poll($, ctx)
+
+    return { result: ran.exitCode === 0 ? `rook: ${clip(ran.stdout?.trim() || 'done', 200)}` : `rook profile use failed: ${failureOf(ran) ?? `rook exited ${ran.exitCode}`}` }
+  }
+
+  const blocked = await prodBlock($, ctx, request.profile)
+
+  if (blocked !== undefined) {
+    return { deny: blocked }
+  }
+
+  try {
+    const result = await rookRun($, ctx, args.argv, signal)
+
+    return { result: profileTestText(request.profile, result.exitCode, result.stdout ?? '', result.stderr) }
+  } finally {
+    ctx.isDirty = true // a profile that answered is verified, and may have become the active one
+    await poll($, ctx)
   }
 }
 
@@ -892,8 +1066,8 @@ export const register: Register = (on, options) => {
 
     await $.command.register({
       name: 'rook',
-      description: 'rook agent testing: pane, status, scenarios, report, explain, run, generate, ui, confirm-prod',
-      argumentHint: '[pane|status|scenarios|report|explain|run|generate|ui|confirm-prod|help]',
+      description: 'rook agent testing: pane, status, scenarios, report, explain, run, generate, project, explore, profile, ui, confirm-prod',
+      argumentHint: '[pane|status|scenarios|report|explain|run|generate|project|explore|profile|ui|confirm-prod|help]',
     })
     await $.tool.register({
       name: 'run',
@@ -944,6 +1118,60 @@ export const register: Register = (on, options) => {
           categories: { type: 'array', items: { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$' }, minItems: 1, maxItems: 20 },
           force: { type: 'boolean', description: "Re-derive every feature's scenarios, whatever the pins say" },
           instruction: { type: 'string', maxLength: 2000, description: 'What the scenarios should cover' },
+        },
+      },
+    })
+    await $.tool.register({
+      name: 'project',
+      description:
+        'List, select or create the rook (TestMu AI agent assurance) project this workspace records to. explore, generate and runs need one selected: ' +
+        'use this when rook says no project is selected. action list (the default) shows ids and names with the active one marked; ' +
+        'use selects one by id; create makes one and selects it — only when the person asked for a new project, with the name they gave. No credits.',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          action: { type: 'string', enum: ['list', 'use', 'create'] },
+          id: { type: 'string', pattern: '^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}$', description: 'For use: the project id from the list' },
+          name: { type: 'string', minLength: 1, maxLength: 120, description: 'For create: the project name' },
+        },
+      },
+    })
+    await $.tool.register({
+      name: 'explore',
+      description:
+        "Set rook up for the agent in this repository (rook explore .): rook reads the codebase, finds the agents and writes each one's features under .testmuai/rook/. " +
+        "Use it in a repository with no rook workspace, and again when the agent gained capabilities rook's features do not describe. " +
+        'Needs a selected project (the rook project tool). Spends credits and takes minutes; it does not call the agent. ' +
+        'Use `instruction` to say where the agent lives or what to focus on, `force` to re-derive every agent. ' +
+        'Afterwards the rook generate tool writes scenarios, and the person adds a profile so rook can reach the agent. ' +
+        APPROVALS_NOTE,
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          force: { type: 'boolean', description: 'Re-derive every agent, whatever the hashes say' },
+          instruction: { type: 'string', maxLength: 2000, description: "Where the agent lives or what to look for, e.g. 'the support bot under services/support'" },
+        },
+      },
+    })
+    await $.tool.register({
+      name: 'profile_test',
+      description:
+        "rook profiles: how rook reaches the agent under test (local, staging…). action test (the default) calls the agent once through a profile — " +
+        'the active one unless `profile` names another — and returns what came back; a profile that answers is marked verified. ' +
+        'It invokes the real agent, so a production-looking profile is refused until the person confirms. ' +
+        "action list shows the active agent's profiles; action use makes one active. " +
+        'Do not try to ADD a profile: it needs connection details only the person has. Ask them to type ' +
+        "`! rook profile add <name> --from connection.md` (a curl, a spec or notes) or `! rook profile add <name> --command '<how the agent starts>'`. " +
+        APPROVALS_NOTE,
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          action: { type: 'string', enum: ['test', 'list', 'use'] },
+          profile: { type: 'string', pattern: '^[\\w.-]{1,64}$', description: 'Profile id. For test: default the active one. Required for use' },
+          goal: { type: 'string', maxLength: 500, description: "For test: what to send the agent. Default: 'Say hello and nothing else.'" },
         },
       },
     })
@@ -1008,6 +1236,38 @@ export const register: Register = (on, options) => {
     }
 
     return { result: await generateRun($, ctx, request, next.signal) }
+  })
+
+  on('tool.call', { tool: PROJECT_TOOL }, async ($, e) => {
+    const input = e as unknown as ProjectRequest
+    const request: ProjectRequest = {
+      ...(input.action !== undefined && { action: input.action }),
+      ...(input.id !== undefined && { id: input.id }),
+      ...(input.name !== undefined && { name: input.name }),
+    }
+
+    return { result: await projectReply($, ctx, request) }
+  })
+
+  on('tool.call', { tool: EXPLORE_TOOL }, async ($, e, next) => {
+    const input = e as unknown as ExploreRequest
+    const request: ExploreRequest = {
+      ...(input.instruction !== undefined && { instruction: input.instruction }),
+      ...(input.force === true && { force: true }),
+    }
+
+    return { result: await exploreRun($, ctx, request, next.signal) }
+  })
+
+  on('tool.call', { tool: PROFILE_TOOL }, async ($, e, next) => {
+    const input = e as unknown as ProfileRequest
+    const request: ProfileRequest = {
+      ...(input.action !== undefined && { action: input.action }),
+      ...(input.profile !== undefined && { profile: input.profile }),
+      ...(input.goal !== undefined && { goal: input.goal }),
+    }
+
+    return profileReply($, ctx, request, next.signal)
   })
 
   // 7 · production guard over the model's shell

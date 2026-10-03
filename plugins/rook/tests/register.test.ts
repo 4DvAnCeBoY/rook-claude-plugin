@@ -38,11 +38,11 @@ async function start($: Engine, on: Parameters<typeof worldOf>[0], files: Record
 }
 
 describe('session start', () => {
-  test('registers /rook and the five tools, opens the pane in a workspace, shows the score', async ($, on) => {
+  test('registers /rook and the tools, opens the pane in a workspace, shows the score', async ($, on) => {
     const { world } = await start($, on, workspace())
 
     expect(world.commands).toEqual(['rook'])
-    expect(world.tools.sort()).toEqual(['generate', 'report', 'run', 'scenarios', 'status'])
+    expect(world.tools.sort()).toEqual(['explore', 'generate', 'profile_test', 'project', 'report', 'run', 'scenarios', 'status'])
     expect(world.opened).toEqual(['rook'])
     expect(world.statuses.at(-1)).toBe('✓1 ✗1 ?1 · 2 gaps · ↑1 fixed')
   })
@@ -663,6 +663,182 @@ describe('7 · production guard', () => {
     await start($, on, prod())
 
     expect(asText((await $.tool.call({ tool: 'Bash', command: 'rook run' } as never)) as Ran)).toBe('ok')
+  })
+
+  test('profile test calls the agent: a production-looking profile is refused, by tool and by /rook, until confirmed', async ($, on) => {
+    const { world, clock } = await start($, on, prod())
+
+    expect(asText((await $.tool.call({ tool: 'mcp__rook__profile_test' } as never)) as Ran)).toContain('profile "commerce-http" looks like it targets production')
+    expect((await $.command.run(command('profile test'))).text).toContain('/rook confirm-prod commerce-http')
+    expect(world.invocations).toEqual([])
+
+    // listing and switching do not call the agent
+    world.answer = argv => (argv[1] === 'profile' ? { code: 0, stdout: ' * commerce-http        execute  Commerce\n' } : undefined)
+    expect(asText((await $.tool.call({ tool: 'mcp__rook__profile_test', action: 'list' } as never)) as Ran)).toContain('* commerce-http')
+
+    await $.command.run(command('confirm-prod'))
+    world.onRun = () => ({ code: 0, stdout: 'commerce-http: answered in 80ms — verified\n\nhello\n' })
+    expect((await $.command.run(command('profile test'))).text).toContain('in the background')
+    await clock.advance(10)
+    expect(world.invocations.at(-1)).toEqual(['rook', 'profile', 'test', '--yes', '--json'])
+    expect(world.toasts.at(-1)).toContain('verified')
+  })
+
+  test('the profile tool guards the profile it names', async ($, on) => {
+    const { world } = await start($, on, workspace({ [`${AGENT_DIR}/profiles/live-shop.yaml`]: PROFILE_PROD.replace('commerce-http', 'live-shop') }))
+
+    expect(asText((await $.tool.call({ tool: 'mcp__rook__profile_test', profile: 'live-shop' } as never)) as Ran)).toContain('profile "live-shop" looks like it targets production')
+    expect(world.invocations).toEqual([])
+  })
+})
+
+describe('setup from inside Claude Code', () => {
+  const LISTED = { ok: true, projects: [{ project_id: '01M0SG9C0FKZHP1B6JWJ05B9DD', name: 'Demo', active: false }], partial: null }
+
+  test('project: list, use and create through the tool, with ids and names checked first', async ($, on) => {
+    const { world } = await start($, on, { 'README.md': '# agent' })
+
+    world.answer = argv =>
+      argv[2] === 'use'
+        ? { code: 0, stdout: 'using Demo\n' }
+        : argv[2] === 'create'
+          ? { code: 0, stdout: 'Support bot (01M0X0421W5KX1R4866Y5Y9YAE) is now the active project\n' }
+          : { code: 0, stdout: JSON.stringify(LISTED) }
+
+    expect(asText((await $.tool.call({ tool: 'mcp__rook__project' } as never)) as Ran)).toContain('01M0SG9C0FKZHP1B6JWJ05B9DD  Demo')
+    expect(world.invocations.at(-1)).toEqual(['rook', 'project', '--json'])
+    expect(asText((await $.tool.call({ tool: 'mcp__rook__project', action: 'use', id: '01M0SG9C0FKZHP1B6JWJ05B9DD' } as never)) as Ran)).toBe('rook: using Demo')
+    expect(world.invocations.at(-1)).toEqual(['rook', 'project', 'use', '01M0SG9C0FKZHP1B6JWJ05B9DD'])
+    expect(asText((await $.tool.call({ tool: 'mcp__rook__project', action: 'create', name: 'Support bot' } as never)) as Ran)).toContain('is now the active project')
+    expect(world.invocations.at(-1)).toEqual(['rook', 'project', 'create', 'Support bot'])
+
+    const before = world.invocations.length
+
+    expect(asText((await $.tool.call({ tool: 'mcp__rook__project', action: 'use', id: '--yes' } as never)) as Ran)).toContain('must be a rook project id')
+    expect(asText((await $.tool.call({ tool: 'mcp__rook__project', action: 'create', name: '-rf' } as never)) as Ran)).toContain('not start with -')
+    expect(world.invocations.length).toBe(before)
+  })
+
+  test("project: an older rook that refuses --json is listed from its plain output; rook's errors come back", async ($, on) => {
+    const { world } = await start($, on, { 'README.md': '# agent' })
+
+    world.answer = argv =>
+      argv[2] === '--json'
+        ? { code: 1, stdout: '', stderr: "error: unknown option '--json'\n" }
+        : argv[2] === 'use'
+          ? { code: 1, stdout: '', stderr: 'no project 01M0SG9C0FKZHP1B6JWJ05B9DD — rook project\n' }
+          : { code: 0, stdout: '* 01M0SG9C0FKZHP1B6JWJ05B9DD  Demo\n' }
+
+    expect(asText((await $.tool.call({ tool: 'mcp__rook__project', action: 'list' } as never)) as Ran)).toBe(
+      'rook projects (1) · active: Demo\n* 01M0SG9C0FKZHP1B6JWJ05B9DD  Demo',
+    )
+    expect(world.invocations.slice(-2)).toEqual([
+      ['rook', 'project', '--json'],
+      ['rook', 'project'],
+    ])
+    expect(asText((await $.tool.call({ tool: 'mcp__rook__project', action: 'use', id: '01M0SG9C0FKZHP1B6JWJ05B9DD' } as never)) as Ran)).toBe(
+      'rook project use failed: no project 01M0SG9C0FKZHP1B6JWJ05B9DD — rook project',
+    )
+  })
+
+  test('explore: streamed with the approvals, then the pane finds the new workspace', async ($, on) => {
+    const { world } = await start($, on, { 'README.md': '# agent' })
+
+    expect(world.opened).toEqual([])
+    world.onRun = () => ({
+      code: 0,
+      stdout: [
+        '▸ agents analysed',
+        '  AGENT         FEATURES  FINDINGS  WORST  NOTE',
+        '  ────────────  ────────  ────────  ─────  ────',
+        '  commercecare  4         1         low',
+        '',
+        '1 analysed, 0 unchanged, 2.10 credits',
+        'written: .testmuai/rook/agents/commercecare/',
+        'active agent: commercecare — the only one registered',
+      ].join('\n'),
+      writes: workspace(),
+    })
+    const ran = (await $.tool.call({ tool: 'mcp__rook__explore', instruction: 'the commerce agent' } as never)) as Ran
+
+    expect(world.invocations.at(-1)).toEqual(['rook', 'explore', '.', '--yes', '--json', '--', 'the commerce agent'])
+    expect(asText(ran)).toContain('rook explore: 1 agent — 1 analysed, 0 unchanged, 2.10 credits')
+    expect(asText(ran)).toContain('commercecare — 4 features · 1 findings (worst low)')
+    expect(asText(ran)).toContain('rook generate tool')
+
+    const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE.props, requestId: 'rook', viewport: PANE.viewport })
+
+    expect(await ui.find({ text: /rook · commercecare/ })).toBeDefined()
+  })
+
+  test("explore: rook's failure is reported, and points at the project tool when it is about the project", async ($, on) => {
+    const { world } = await start($, on, { 'README.md': '# agent' })
+
+    world.onRun = () => ({ code: 1, stdout: '', stderr: 'no project selected — rook project use <id>\n' })
+    const ran = (await $.tool.call({ tool: 'mcp__rook__explore' } as never)) as Ran
+
+    expect(asText(ran)).toBe('rook explore did not complete: no project selected — rook project use <id> (the rook project tool lists and selects projects)')
+    expect(asText((await $.tool.call({ tool: 'mcp__rook__explore', instruction: 'x\u0000y' } as never)) as Ran)).toContain('instruction must be')
+  })
+
+  test('profile_test: the reply comes back; a failure carries rook\'s own lines; use switches and the pane follows', async ($, on) => {
+    const { world } = await start($, on, workspace())
+
+    world.onRun = () => ({ code: 0, stdout: 'commerce-http: answered in 95ms — verified\n\nHi, how can I help?\n' })
+    const ok = (await $.tool.call({ tool: 'mcp__rook__profile_test', goal: 'Say hi' } as never)) as Ran
+
+    expect(world.invocations.at(-1)).toEqual(['rook', 'profile', 'test', '--yes', '--json', '--goal', 'Say hi'])
+    expect(asText(ok)).toContain('Hi, how can I help?')
+
+    world.onRun = () => ({ code: 1, stdout: '', stderr: 'commerce-http: HTTP 401\n  the script exited 1\n' })
+    const failed = (await $.tool.call({ tool: 'mcp__rook__profile_test', profile: 'commerce-http' } as never)) as Ran
+
+    expect(asText(failed)).toContain('rook profile test (commerce-http) failed:\n  commerce-http: HTTP 401\n  the script exited 1')
+
+    world.answer = argv => (argv[2] === 'use' ? { code: 0, stdout: 'using staging\n' } : undefined)
+    world.files.set(`${AGENT_DIR}/profiles/active`, 'staging\n')
+    expect(asText((await $.tool.call({ tool: 'mcp__rook__profile_test', action: 'use', profile: 'staging' } as never)) as Ran)).toBe('rook: using staging')
+    expect(world.invocations.at(-1)).toEqual(['rook', 'profile', 'use', 'staging'])
+
+    const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE.props, requestId: 'rook', viewport: PANE.viewport })
+
+    expect(await ui.find({ text: /profile staging/ })).toBeDefined()
+
+    const before = world.invocations.length
+
+    expect(asText((await $.tool.call({ tool: 'mcp__rook__profile_test', profile: '--from=/etc/passwd' } as never)) as Ran)).toContain('profile must be a profile id')
+    expect(world.invocations.length).toBe(before)
+  })
+
+  test('/rook project, explore and profile', async ($, on) => {
+    const { world, clock } = await start($, on, workspace())
+
+    world.answer = argv =>
+      argv[1] === 'project' ? { code: 0, stdout: JSON.stringify(LISTED) } : argv[1] === 'profile' && argv[2] === undefined ? { code: 0, stdout: '  none — rook profile add\n' } : undefined
+
+    expect((await $.command.run(command('project'))).text).toContain('01M0SG9C0FKZHP1B6JWJ05B9DD  Demo')
+    expect((await $.command.run(command('project use 01M0SG9C0FKZHP1B6JWJ05B9DD'))).text).toBeDefined()
+    expect(world.invocations.at(-1)).toEqual(['rook', 'project', 'use', '01M0SG9C0FKZHP1B6JWJ05B9DD'])
+    await $.command.run(command('project create Support   bot'))
+    expect(world.invocations.at(-1)).toEqual(['rook', 'project', 'create', 'Support bot'])
+    expect((await $.command.run(command('project drop x'))).text).toBe('/rook project [list|use <id>|create <name>]')
+
+    expect((await $.command.run(command('explore --yes'))).text).toContain('unknown explore option')
+    world.onRun = () => ({ code: 0, stdout: '1 analysed, 0 unchanged, 1.00 credits\n' })
+    expect((await $.command.run(command('explore --force -- the refunds bot'))).text).toContain('in the background')
+    await clock.advance(10)
+    expect(world.invocations.at(-1)).toEqual(['rook', 'explore', '.', '--yes', '--json', '--force', '--', 'the refunds bot'])
+    expect(world.toasts.at(-1)).toContain('1 analysed')
+
+    expect((await $.command.run(command('profile'))).text).toContain('! rook profile add')
+    expect((await $.command.run(command('profile add staging'))).text).toContain('! rook profile add')
+    expect((await $.command.run(command('profile use'))).text).toContain('use needs the id')
+
+    world.onRun = () => ({ code: 0, stdout: 'commerce-http: answered in 10ms — verified\n\nok\n' })
+    await $.command.run(command('profile test commerce-http -- what can you do?'))
+    await clock.advance(10)
+    expect(world.invocations.at(-1)).toEqual(['rook', 'profile', 'test', 'commerce-http', '--yes', '--json', '--goal', 'what can you do?'])
+    expect((await $.command.run(command('help'))).text).toContain('/rook explore')
   })
 })
 

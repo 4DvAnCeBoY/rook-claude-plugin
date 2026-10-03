@@ -50,6 +50,7 @@ A Claude Code plugin for [rook](https://github.com/LambdaTest/rook), TestMu AI's
   # or: curl -fsSL https://raw.githubusercontent.com/LambdaTest/rook/main/install.sh | bash
   ```
 - **A rook workspace** in your agent's repository: run `rook login`, then `rook explore .`, `rook generate` and `rook profile add`. See [rook's five-minute guide](https://github.com/LambdaTest/rook#five-minutes).
+  Or do it from inside Claude Code: ask Claude to set rook up (its `project`, `explore` and `profile_test` tools), or use `/rook project`, `/rook explore` and `/rook profile`. Adding a profile stays yours: `! rook profile add <name> --from connection.md`.
 
 ## Install
 
@@ -93,6 +94,7 @@ Start Claude Code **in your agent's repository**, the folder that contains `.tes
 | Run rook yourself, in the background | `/rook run --only SC-003,SC-018` · `/rook run --class adversarial --test` · `/rook run --profile local --tag smoke -- only the refund paths` |
 | Continue a run whose evidence lands later | `/rook run --run 2026-09-28T15-44-25Z --phases collect,judge`, or `--resume <run>` to carry its work into a new run |
 | Write scenarios for a new capability | Ask Claude, or `/rook generate --total 10 -- the returns flow`. If rook's features don't describe the capability yet, run `rook explore .` first |
+| Set rook up in a new repository | `/rook project use <id>` (or `create <name>`), `/rook explore`, `/rook generate`, then `! rook profile add <name> --from connection.md` and `/rook profile test`. Or ask Claude to do it |
 | See which scenarios exist | `/rook scenarios`, or ask Claude to use the rook `scenarios` tool |
 | Read a request, response or evidence file | `/rook ui`, or **Evidence viewer** in the pane: rook's read-only on-disk viewer |
 | Read a run without spending credits | `/rook report`, or ask Claude to use the rook `report` tool |
