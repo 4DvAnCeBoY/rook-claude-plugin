@@ -433,3 +433,8 @@ export function changesIn(current: readonly RookCurrent[], runId: string | undef
     regressed: moved.filter(row => row.was === 'Pass'),
   }
 }
+
+/** The project's agents: one directory each under `agents/`, named by local id. */
+export async function agentIdsOf(io: Io, projectDir: string): Promise<string[]> {
+  return (await dirs(io, `${projectDir}/agents`)).sort()
+}

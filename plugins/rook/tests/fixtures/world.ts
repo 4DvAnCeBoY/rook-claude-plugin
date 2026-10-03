@@ -21,6 +21,14 @@ export type World = {
   /** What the fake `rook run` does: write files, then print this document. */
   onRun: (argv: readonly string[]) => { stdout: string; code: number; writes?: Record<string, string> }
   status: { stdout: string; code: number }
+  /** Answers for one short command, by its words after `rook` (`agent use`, `scenarios exclude`): the longest match wins over `status`. */
+  replies: Record<string, { stdout: string; code: number; writes?: Record<string, string> }>
+  /**
+   * `rook plan --json`. Balance checks are counted here rather than in
+   * `invocations`, so a test about what ran stays about what ran.
+   */
+  plan: { stdout: string; code: number }
+  planChecks: number
   /** When set, `$.process` cannot start the binary at all. */
   isMissingBinary: boolean
   /** Called while a spawned rook is running, before it prints. */
@@ -42,6 +50,9 @@ export function worldOf(on: On, files: Readonly<Record<string, string>>, env: Re
     invocations: [],
     onRun: () => ({ stdout: JSON.stringify({ ok: true, halted: false, credits: 0 }), code: 0 }),
     status: { stdout: JSON.stringify({ project_id: 'P', offline: false, agents: [] }), code: 0 },
+    replies: {},
+    plan: { stdout: JSON.stringify({ username: 'dev', subscription: 'Team', credits: 120.5 }), code: 0 },
+    planChecks: 0,
     isMissingBinary: false,
     during: undefined,
   }
@@ -75,9 +86,25 @@ export function worldOf(on: On, files: Readonly<Record<string, string>>, env: Re
       return { deny: `ENOENT: ${e.argv[0]}` }
     }
 
-    world.invocations.push([...e.argv])
+    const words = e.argv.slice(1).join(' ')
 
-    return { value: { exitCode: world.status.code, stdout: world.status.stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    if (words === 'plan --json') {
+      world.planChecks += 1
+
+      return { value: { exitCode: world.plan.code, stdout: world.plan.stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
+
+    world.invocations.push([...e.argv])
+    const key = Object.keys(world.replies)
+      .filter(prefix => words === prefix || words.startsWith(`${prefix} `))
+      .sort((a, b) => b.length - a.length)[0]
+    const reply = key === undefined ? world.status : world.replies[key]!
+
+    for (const [path, text] of Object.entries((reply as { writes?: Record<string, string> }).writes ?? {})) {
+      world.files.set(path, text)
+    }
+
+    return { value: { exitCode: reply.code, stdout: reply.stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
 
   on('process.spawn', async function* ($, e) {

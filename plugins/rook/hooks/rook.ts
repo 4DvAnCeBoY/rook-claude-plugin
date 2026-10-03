@@ -343,7 +343,8 @@ export function parseGenerateFlags(text: string): GenerateRequest | { error: str
 
 export const CLI_ENV = { NO_COLOR: '1', FORCE_COLOR: '0' }
 
-export type CliResult = { exitCode: number; doc: unknown; stderr: string }
+/** `stdout` is kept for the few commands that answer in prose (`rook agent`, `rook report --rca`). */
+export type CliResult = { exitCode: number; doc: unknown; stderr: string; stdout?: string }
 
 /** The one JSON document a `--json` command prints, or undefined when it printed prose. */
 export function jsonOf(stdout: string): unknown {
@@ -387,4 +388,76 @@ export function failureOf(result: CliResult): string | undefined {
   const last = result.stderr.trim().split('\n').filter(Boolean).pop()
 
   return `${said ?? last ?? `rook exited ${result.exitCode}`}${doc?.remedy ? ` (remedy: ${doc.remedy})` : ''}`
+}
+
+// ── depth: rca on a finished run, agents, curation, the balance ─────────────
+
+/**
+ * `rook report <run> --rca`: explain a finished run's clusters (cause, whose
+ * fault, a proposed diff) from its evidence, without calling the agent again.
+ * The run id is always named, so a run that starts meanwhile is not the one explained.
+ */
+export function reportRcaArgs(runId: unknown, approval: Approval = { allowRules: [] }): { argv: string[] } | { error: string } {
+  if (typeof runId !== 'string' || !RUN_ID.test(runId)) {
+    return { error: 'run must be a run id (2026-09-28T15-54-56Z form)' }
+  }
+
+  return { argv: ['report', runId, '--rca', ...approvalArgs(approval), '--json'] }
+}
+
+/**
+ * What `rook report --rca` printed. Under --rca it answers in prose, not a
+ * document: the rendered report, then `<n> credits`. A run already explained
+ * at the agent's current version is re-rendered for nothing.
+ */
+export function rcaOutcome(stdout: string): { credits?: number; isReused: boolean } {
+  const isReused = /already explained at this version/.test(stdout)
+  const said = [...stdout.matchAll(/^\s*(\d+(?:\.\d+)?) credits\s*$/gm)].pop()?.[1]
+
+  return { isReused, ...(said !== undefined && !isReused && { credits: Number(said) }) }
+}
+
+/** An agent's local id: its directory name under the project. */
+export const AGENT_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
+
+export function agentUseArgs(id: unknown): { argv: string[] } | { error: string } {
+  return typeof id === 'string' && AGENT_ID.test(id) ? { argv: ['agent', 'use', id] } : { error: 'agent must be an agent id: letters, digits, ., - or _' }
+}
+
+/** `rook agent` prints `* <id>  <name>` per agent, the active one starred; it has no --json. */
+export function parseAgentList(stdout: string): { id: string; name: string; isActive: boolean }[] {
+  return stdout.split('\n').flatMap(line => {
+    const found = /^([* ]) (\S+)(?:\s{2,}(.*))?$/.exec(line.trimEnd())
+
+    return found && AGENT_ID.test(found[2]!) ? [{ id: found[2]!, name: (found[3] ?? '').trim() || found[2]!, isActive: found[1] === '*' }] : []
+  })
+}
+
+/**
+ * `rook scenarios exclude|include <ids> --json`. `delete` is not offered: it
+ * removes the files for good, so it stays a command the person types in a terminal.
+ */
+export function curateArgs(verb: unknown, ids: unknown): { argv: string[] } | { error: string } {
+  if (verb === 'delete') {
+    return {
+      error:
+        'delete removes scenario files permanently and is not offered here; exclude keeps them out of runs. ' +
+        'To delete, the person runs `rook scenarios delete <ids>` in a terminal.',
+    }
+  }
+
+  if (verb !== 'exclude' && verb !== 'include') {
+    return { error: 'action must be exclude or include' }
+  }
+
+  const checked = words('ids', ids, SCENARIO, 200)
+
+  return 'error' in checked ? { error: checked.error.replace('not valid ids', 'not scenario ids (SC-001 form)') } : { argv: ['scenarios', verb, ...checked, '--json'] }
+}
+
+/** `rook plan --json` → the credit balance; undefined when rook could not fetch it (its `credits: null`). */
+export function balanceOf(doc: unknown): number | undefined {
+  const value = (doc as { credits?: unknown } | undefined)?.credits
+
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }

@@ -130,6 +130,12 @@ declare module 'claude-code' {
       viewerUrl: string | null
       /** Bumped while a run is in flight, so elapsed times redraw. */
       tick: number
+      /** The project's agent ids, for the pane's switch. */
+      agents: string[]
+      /** `rook plan` credits available; null until fetched or when rook could not say. */
+      balance: number | null
+      /** The run `rook report --rca` is explaining now. */
+      explaining: string | null
     }
   }
 }

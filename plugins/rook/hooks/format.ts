@@ -221,7 +221,10 @@ export function failureContext(run: RookRunView, agentDir: string, agentId: stri
     '',
     'Fix the agent where the evidence shows its behaviour is wrong. If a criterion itself looks wrong, say so rather than bending the agent to it. ' +
       'Re-test with the rook run tool, passing only the scenario ids you touched.' +
-      (unexplained ? ' To have rook explain the clusters (cause, whose fault, a proposed diff), re-run with rca: true; it costs extra credits.' : ''),
+      (unexplained
+        ? ' To have rook explain the clusters (cause, whose fault, a proposed diff), call the rook report tool with rca: true: ' +
+          'it reads this run again without calling the agent, free if this agent version was explained already, otherwise it costs credits.'
+        : ''),
   ].join('\n')
 }
 
@@ -410,4 +413,56 @@ export function generateText(doc: unknown): string {
     ...(gaps.length > 0 ? ['Gaps the writers named (what these scenarios cannot cover):', ...gaps.slice(0, 10).map(gap => `  ? ${clip(gap, 240)}`)] : []),
     ...(written.length > 0 ? ['Run the new scenarios with the rook run tool; the rook scenarios tool lists their ids.'] : []),
   ].join('\n')
+}
+
+// ── depth: rca on a finished run, agents, curation, the balance ─────────────
+
+/** The line above a report that `rook report --rca` just explained. */
+export function rcaLine(runId: string, outcome: { credits?: number; isReused: boolean }): string {
+  return outcome.isReused
+    ? `rook: run ${runId} was already explained at this agent version; nothing re-derived, no credits spent.`
+    : `rook explained run ${runId}${outcome.credits === undefined ? '' : ` for ${credits(outcome.credits)}`} (the agent was not called again).`
+}
+
+/** The project's agents for the model, the active one marked. */
+export function agentsText(agents: readonly { id: string; name: string; isActive: boolean }[]): string {
+  if (agents.length === 0) {
+    return 'rook: no agents in this project yet — the person runs `rook explore .` first.'
+  }
+
+  return [
+    `rook agents in this project (${agents.length}):`,
+    ...agents.map(agent => `  ${agent.isActive ? '*' : ' '} ${agent.id}${agent.name !== agent.id ? `  ${agent.name}` : ''}${agent.isActive ? '  (active)' : ''}`),
+    ...(agents.length > 1 ? ['Switch with the rook agent tool and `use`: runs, scenarios and reports follow the active agent.'] : []),
+  ].join('\n')
+}
+
+/** `rook scenarios exclude|include --json`: `{ ok, verb, changed, unknown }`. */
+export function curateText(doc: unknown): string {
+  const result = doc as { verb?: string; changed?: unknown; unknown?: unknown } | undefined
+  const verb = result?.verb === 'include' ? 'included' : 'excluded'
+  const changed = Array.isArray(result?.changed) ? result.changed.map(String) : []
+  const unknown = Array.isArray(result?.unknown) ? result.unknown.map(String) : []
+
+  return [
+    changed.length > 0 ? `rook: ${verb} ${changed.join(', ')}.` : `rook: nothing changed — already ${verb}.`,
+    ...(unknown.length > 0 ? [`No such scenario here: ${unknown.join(', ')}.`] : []),
+    ...(changed.length > 0 && verb === 'excluded' ? ['Excluded scenarios stay on disk and leave runs until included again.'] : []),
+  ].join('\n')
+}
+
+/** `120.5 credits left`, or nothing when the balance is unknown. */
+export const balanceText = (balance: number | null | undefined): string | undefined =>
+  balance === null || balance === undefined ? undefined : `${credits(balance)} left`
+
+/** A warning when the balance will not cover re-testing `count` scenarios at `rate` credits each. */
+export function balanceWarning(balance: number | null | undefined, rate: number | undefined, count: number): string | undefined {
+  if (balance === null || balance === undefined || rate === undefined || count <= 0 || balance >= rate * count) {
+    return undefined
+  }
+
+  return (
+    `Credit balance: ${credits(balance)}, less than the ~${credits(rate * count)} re-testing ${plural(count, 'scenario')} would take at this run's rate. ` +
+    'Tell the person before starting another run.'
+  )
 }
