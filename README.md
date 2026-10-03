@@ -5,17 +5,25 @@
 A Claude Code plugin for [rook](https://github.com/LambdaTest/rook), TestMu AI's agent-assurance CLI. While Claude writes or changes your AI agent, this plugin lets Claude run rook's scenarios against it, read the verdicts and the evidence, and fix what failed. You watch the results in a live pane.
 
 ```
-┌ rook · commercecare ─────────────────────────────────────┐
-│ hardened non-functional matrix · 2026-09-28T15-44-25Z    │
+┌ rook · commercecare · profile commerce-hooks ────────────┐
+│ agent  ✓ 18  ✗ 2  ? 1  3 never run                      │
+│ latest: hardened matrix · 2026-09-28T15-44-25Z           │
 │ ██████████████████████████████ 4/4 done                  │
 │ ✓ 0 Pass  ✗ 2 Fail  ? 2 Unable to Verify                 │
-│ 18.4 credits · -1 Pass vs 2026-09-28T15-41-26Z           │
-│ Failed                                                   │
-│ ✗ SC-003 Look up order ORD-1009 without redundant calls  │
-│ ✗ SC-018 Multimodal evidence assessment bundle           │
+│ pass rate 0% · 18.4 credits · 4m12s                      │
+│ ↓ regressed SC-003                                       │
+│ Refund guardrail broke under a manager-approval claim    │
+│ Clusters                                                 │
+│ ▾ CL-01 [compromised] policy violated in F-001 (2) · remedy │
+│     cause: the refund tool trusts a claim in the turn    │
+│     fault: agent · high confidence                       │
+│     Remedy  ```diff … ```                                │
+│     [ Fix this with Claude ]                             │
 │ What nobody looked at                                    │
-│ ? SC-001 not_observable                                  │
-│ [ Run all ] [ Re-run failed ] [ Fix with Claude ]        │
+│ ? SC-001 (rook could not observe it) tool calls not seen │
+│ Next                                                     │
+│ · Add a ledger read to the profile hooks                 │
+│ [ Run all ] [ Re-run failed ] [ Fix with Claude ] [ Evidence viewer ] │
 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -23,13 +31,14 @@ A Claude Code plugin for [rook](https://github.com/LambdaTest/rook), TestMu AI's
 
 ## Features
 
-1. **Claude runs rook.** Claude gets three tools: `run`, `report` and `status`. After changing your agent's prompt, tools or code, Claude re-tests the scenarios it touched. It gets back Pass / Fail / Unable to Verify for each one, plus each failing criterion with what was expected, what actually happened, and rook's quoted evidence.
-2. **Live verdict pane.** Shows progress, counts, credits, the trend against your previous run, and *what nobody looked at* (verification gaps).
-3. **Re-test prompt.** When Claude edits a file your agent is built from, a bar above the prompt names the scenarios that file affects, with a **Re-test** button.
-4. **Failures as context.** When a run you started in another terminal finishes with failures, Claude receives the failing evidence automatically.
-5. **Status line score.** For example `rook ✓41 ✗2 ?3 · 2 gaps · ↑3 vs last`, or `rook ▸ 12/48` while a run is in progress.
-6. **`/rook` commands.** `pane`, `status`, `report`, `explain`, `run`, `confirm-prod` and `help`.
-7. **Production guard.** Blocks rook runs against a target that looks like production until **you** type `/rook confirm-prod`. Your agent's writes are real, and rook cannot undo them.
+1. **Claude runs rook.** Claude gets five tools: `run`, `report`, `status`, `scenarios` and `generate`. After changing your agent's prompt, tools or code, Claude picks the scenarios it touched (`scenarios` lists them with their latest verdicts) and re-tests them. It gets back Pass / Fail / Unable to Verify for each one, with failures **grouped into rook's root-cause clusters**. With `rca`, each cluster carries rook's cause, whose fault it is (agent, scenario or harness), the files to open and **the proposed diff** from `remedies/CL-xx.md`. It also gets each failing criterion with expected vs achieved and quoted evidence, rook's narrative and its next steps.
+2. **Live verdict pane.** Shows every scenario's **latest verdict across runs**, so a two-scenario re-test doesn't stand in for the whole agent. While a run is going, each scenario gets a lane with its phase and elapsed time. After a run you get the clusters, failed scenarios you can **open to their criteria and evidence** and hand to Claude one at a time, *what nobody looked at* in plain words, and rook's next steps. **Evidence viewer** starts `rook ui --local` and links to it.
+3. **Progress where you're looking.** While Claude waits on a run, the turn's spinner shows `rook 3/8 · SC-004 execute · 1m12s`, at any terminal width.
+4. **Re-test prompt.** When Claude edits a file your agent is built from, a bar above the prompt names the scenarios that file affects and estimates the cost at the last run's rate. It has a **Re-test** button.
+5. **Failures as context.** When a run you started in another terminal finishes with failures, Claude receives the clusters and the failing evidence automatically.
+6. **Status line score.** For example `rook ✓41 ✗2 ?3 · 2 gaps · ↑1 fixed ↓1 regressed`, or `rook ▸ 12/48 · SC-013 judging` while a run is in progress. Fixed and regressed are counted per scenario against that scenario's previous verdict, never between runs of different scope.
+7. **`/rook` commands.** `pane`, `status`, `scenarios`, `report`, `explain`, `run`, `generate`, `ui`, `confirm-prod` and `help`.
+8. **Production guard.** Blocks rook runs against a target that looks like production, including a profile named in the run, until **you** type `/rook confirm-prod`. Your agent's writes are real, and rook cannot undo them.
 
 ## Requirements
 
@@ -79,24 +88,31 @@ Start Claude Code **in your agent's repository**, the folder that contains `.tes
 |---|---|
 | See the latest results | `/rook`. The pane also opens by itself on terminals at least 144 columns wide. |
 | Have Claude test its own change | Ask: *"Re-test the scenarios you touched with rook and fix what fails."* |
-| Hand a run's failures to Claude | `/rook explain` (latest run) or `/rook explain 2026-09-28T15-44-25Z` |
-| Run rook yourself, in the background | `/rook run --only SC-003,SC-018` · `/rook run --class adversarial --test` |
+| Hand a run's failures to Claude | `/rook explain` (latest run) or `/rook explain 2026-09-28T15-44-25Z`, or open a cluster or failure in the pane and press **Fix this with Claude** |
+| Have rook explain the failures | Ask Claude to re-run with `rca`, or `/rook run --only SC-003 --rca`. Each cluster then gets a cause, a fault and a proposed diff |
+| Run rook yourself, in the background | `/rook run --only SC-003,SC-018` · `/rook run --class adversarial --test` · `/rook run --profile local --tag smoke -- only the refund paths` |
+| Continue a run whose evidence lands later | `/rook run --run 2026-09-28T15-44-25Z --phases collect,judge`, or `--resume <run>` to carry its work into a new run |
+| Write scenarios for a new capability | Ask Claude, or `/rook generate --total 10 -- the returns flow`. If rook's features don't describe the capability yet, run `rook explore .` first |
+| See which scenarios exist | `/rook scenarios`, or ask Claude to use the rook `scenarios` tool |
+| Read a request, response or evidence file | `/rook ui`, or **Evidence viewer** in the pane: rook's read-only on-disk viewer |
 | Read a run without spending credits | `/rook report`, or ask Claude to use the rook `report` tool |
 | Check sync state and agents | `/rook status` |
-| Run against a target that looks like production | Point the profile at staging. If you really mean it, type `/rook confirm-prod`, which allows that profile in this directory for 15 minutes. |
+| Run against a target that looks like production | Point the profile at staging. If you really mean it, type `/rook confirm-prod` (or `/rook confirm-prod <profile>` for a profile the run names), which allows that profile in this directory for 15 minutes. |
 
 ### A typical loop
 
 1. Ask Claude to change your agent, for example to *"tighten the refund guardrail"*.
 2. Claude edits `src/tools.mjs`. The bar shows **Agent changed since last run: src/tools.mjs · 2 scenarios touch it**.
-3. Press **Re-test**, or ask Claude to. Claude calls `rook run` with `only: ["SC-004", "SC-007"]`, and Claude Code asks your permission first.
-4. The verdicts come back with evidence, for example: *"achieved: the agent called issue_refund for $500 after a manager-approval claim"*. Claude fixes the agent and re-tests.
-5. The pane and status line update as each verdict lands.
+3. Press **Re-test**, or ask Claude to. Claude calls `rook run` with `only: ["SC-004", "SC-007"]`, and Claude Code asks your permission first. The spinner and the pane's lanes show each scenario's phase while it runs.
+4. The verdicts come back grouped by cluster with evidence, for example: *"achieved: the agent called issue_refund for $500 after a manager-approval claim"*. With `rca`, rook's proposed diff comes with them. Claude fixes the agent and re-tests.
+5. The pane and status line update as each verdict lands. The status line counts what the run fixed and what it regressed.
 
 ### Things to know
 
 - **Each `run` calls your real agent and spends rook credits.** Claude Code asks your permission before every call to the `run` tool. Prefer `only` with specific scenario ids.
 - **Unable to Verify is not Fail.** The plugin keeps them separate everywhere, as rook does.
+- **rook's own tool calls are approved with `--yes`.** When the plugin runs `rook run` or `rook generate`, rook's explorer, planner and judge may read your code or run commands. Set `allowRules` to approve only the rules you list (passed as `--allow`); rook declines everything else.
+- **rook's remedies are proposals.** Claude is told to check a proposed diff against the code before applying it, and to say so when rook blames the scenario rather than the agent.
 - **The production guard is a speed bump, not a sandbox.** It reads the profile's target fields and the values you set with `rook env set`, never your shell's environment. It never shows a variable's value.
 - The plugin uses only rook's public contract: `--json` output and the documented `.testmuai/rook/` file layout. It holds no prompts and no keys.
 
@@ -113,6 +129,7 @@ Change them in `/config`, or under `pluginConfigs.rook` in your settings file.
 | `failureContext` | `true` | Hand failures of runs started elsewhere to Claude |
 | `prodGuard` | `true` | Block production-looking targets until confirmed |
 | `prodPatterns` | `prod,production,live` | Whole words that mark a target as production |
+| `allowRules` | *(empty)* | rook tool-call approvals, separated by `;`, e.g. `bash(npm test); bash(git *)@explore`. Empty means `--yes` |
 
 ## Development
 

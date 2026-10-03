@@ -18,9 +18,41 @@ export type RookScenarioRow = {
   reason?: string
   /** What the judge could not look at, even on a Pass. */
   gaps: string[]
+  /** What rook said about each criterion it could not check: the way to make it observable. */
+  unchecked: string[]
   compromised: boolean
   summary: string
   failing: RookFailingCriterion[]
+}
+
+/**
+ * A group of failures rook found one shape for (report.yaml `clusters`).
+ * `cause` onwards are present once `--rca` explained it.
+ */
+export type RookCluster = {
+  id: string
+  why: string
+  /** `failed`, `unverifiable` or `compromised`. */
+  kind: string
+  featureId?: string
+  scenarios: { id: string; title: string }[]
+  cause?: string
+  remedy?: string
+  /** `agent`, `scenario`, `harness` or `unclear`: whose fault the failure is. */
+  fault?: string
+  confidence?: string
+  /** Files rook says to open. */
+  where: string[]
+}
+
+/** A scenario in flight: its directory exists, its verdict does not yet. */
+export type RookLane = {
+  id: string
+  title: string
+  /** The last phase rook's hooks finished, or `starting` / `judging`. */
+  phase: string
+  /** When the scenario started, ms since epoch. */
+  since: number
 }
 
 export type RookRunView = {
@@ -32,15 +64,34 @@ export type RookRunView = {
   finished: boolean
   counts: RookCounts
   rows: RookScenarioRow[]
+  lanes: RookLane[]
+  clusters: RookCluster[]
   passRate?: number
   credits?: number
+  durationMs?: number
   headline?: string
+  narrative?: string
+  next: string[]
+}
+
+/** One scenario's newest verdict across every run, and the one before it. */
+export type RookCurrent = {
+  id: string
+  title: string
+  status: RookStatus
+  runId: string
+  /** The verdict this scenario had in the run before `runId`, if any. */
+  was?: RookStatus
 }
 
 export type RookSnapshot = {
   agentId?: string
+  profileId?: string
   latest?: RookRunView
-  previous?: { runId: string; passed: number; failed: number }
+  /** Every scenario's newest verdict, newest runs first: the agent's health, whatever the last run's scope. */
+  current: RookCurrent[]
+  /** Scenarios the agent has that no run has judged yet. */
+  neverRun: number
   checkedAt: number
 }
 
@@ -49,6 +100,8 @@ export type RookStale = {
   scenarios: { id: string; title: string }[]
   /** True when no feature names the file: every scenario of the agent may be affected. */
   isWholeAgent: boolean
+  /** What re-testing them would cost at the latest run's credits per scenario. */
+  estimate?: number
   since: number
 }
 
@@ -71,6 +124,12 @@ declare module 'claude-code' {
       /** The newest finished run this session has already reported on. */
       seenFinished: string | null
       isBandHidden: boolean
+      /** The pane row opened to show its detail: a scenario id or a cluster id. */
+      expanded: string | null
+      /** The address `rook ui --local` serves on, once started. */
+      viewerUrl: string | null
+      /** Bumped while a run is in flight, so elapsed times redraw. */
+      tick: number
     }
   }
 }

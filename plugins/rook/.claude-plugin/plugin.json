@@ -1,12 +1,20 @@
 {
   "name": "rook",
   "version": "0.1.0",
-  "description": "rook by TestMu AI inside Claude Code: Claude runs rook against the agent it is building, a live verdict pane, re-test prompts after agent edits, failures fed back as fix context, a status line score, /rook commands and a production-target guard.",
-  "author": { "name": "TestMu AI (formerly LambdaTest)" },
+  "description": "rook by TestMu AI inside Claude Code: Claude runs rook against the agent it is building and gets failures back grouped into root-cause clusters with rook's remedies, writes scenarios, a live pane with per-scenario lanes and openable failures, re-test prompts after agent edits, a status line score, /rook commands and a production-target guard.",
+  "author": {
+    "name": "TestMu AI (formerly LambdaTest)"
+  },
   "homepage": "https://github.com/LambdaTest/rook",
   "repository": "https://github.com/LambdaTest/rook",
   "license": "Apache-2.0",
-  "keywords": ["rook", "agent-testing", "agent-assurance", "evals", "red-team"],
+  "keywords": [
+    "rook",
+    "agent-testing",
+    "agent-assurance",
+    "evals",
+    "red-team"
+  ],
   "types": "./types/index.d.ts",
   "userConfig": {
     "rookPath": {
@@ -20,12 +28,16 @@
       "title": "Verdict pane",
       "description": "auto opens the live pane when a session starts in a rook workspace (on terminals wide enough to dock it); command opens it only on /rook; off never opens it.",
       "default": "auto",
-      "options": ["auto", "command", "off"]
+      "options": [
+        "auto",
+        "command",
+        "off"
+      ]
     },
     "statusLine": {
       "type": "boolean",
       "title": "Status line score",
-      "description": "Show the latest run's Pass / Fail / Unable to Verify counts and the trend against the previous run.",
+      "description": "Show every scenario's latest Pass / Fail / Unable to Verify counts, the latest run's gaps, and how many scenarios it fixed or regressed.",
       "default": true
     },
     "retestBand": {
@@ -51,6 +63,12 @@
       "title": "Production markers",
       "description": "Comma-separated words that mark a target as production when they appear as a whole word in its endpoint, domain, command or environment values.",
       "default": "prod,production,live"
+    },
+    "allowRules": {
+      "type": "string",
+      "title": "rook tool approvals",
+      "description": "rook's own tool calls during a run or generate (reading the agent's code, running its commands) are approved with --yes by default. List rules here, separated by ;, to approve only those (passed as --allow, e.g. bash(npm test); bash(git *)@explore); rook then declines every other call.",
+      "default": ""
     }
   }
 }

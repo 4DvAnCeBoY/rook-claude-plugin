@@ -1,4 +1,5 @@
-import type { RookRunView, RookScenarioRow, RookSnapshot, RookStale } from '../types'
+import type { RookCluster, RookCurrent, RookRunning, RookRunView, RookScenarioRow, RookSnapshot, RookStale } from '../types'
+import { changesIn, countsOf } from './workspace'
 
 /**
  * Every string the mod shows or hands to the model, kept pure so the tests
@@ -14,33 +15,87 @@ export const clip = (text: string, max: number): string => {
   return flat.length <= max ? flat : `${flat.slice(0, Math.max(0, max - 1)).trimEnd()}…`
 }
 
+/** Like clip, but keeps line breaks: diffs and multi-line evidence stay readable. */
+export const excerpt = (text: string, max: number): string => {
+  const kept = text.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim()
+
+  return kept.length <= max ? kept : `${kept.slice(0, Math.max(0, max - 1)).trimEnd()}…`
+}
+
+const indent = (text: string, by: string) => text.split('\n').join(`\n${by}`)
+
 export const credits = (value: number | undefined): string | undefined =>
   value === undefined ? undefined : `${Number(value.toFixed(2))} credits`
+
+/** `4m12s`, `33.1s`, `850ms`. */
+export function duration(ms: number): string {
+  if (ms < 1000) {
+    return `${Math.round(ms)}ms`
+  }
+
+  if (ms < 60_000) {
+    return `${(ms / 1000).toFixed(1)}s`
+  }
+
+  const minutes = Math.floor(ms / 60_000)
+  const seconds = Math.floor((ms % 60_000) / 1000)
+
+  return minutes < 60 ? `${minutes}m${String(seconds).padStart(2, '0')}s` : `${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, '0')}m`
+}
+
+/** rook's `unverifiable_reason` codes in words. */
+const REASONS: Record<string, string> = {
+  agent_never_ran: 'the agent never ran',
+  not_observable: 'rook could not observe it',
+  undecidable: 'the judge could not decide',
+}
+
+export const reasonText = (reason: string | undefined): string | undefined => (reason === undefined ? undefined : (REASONS[reason] ?? reason.replace(/_/g, ' ')))
 
 /** Rows that passed but carry gaps, plus every Unable to Verify. */
 export const unlooked = (run: RookRunView): RookScenarioRow[] =>
   run.rows.filter(row => row.status === 'Unable to Verify' || row.gaps.length > 0)
 
+/** What nobody looked at in one row, in words: rook's own gap notes first, then the reason. */
+export function gapText(row: RookScenarioRow, max: number): string {
+  const said = row.gaps.length > 0 ? row.gaps.join('; ') : row.unchecked.join('; ')
+
+  return clip([said, said === '' ? reasonText(row.reason) : undefined].filter(Boolean).join(' ') || 'gap', max)
+}
+
 export function statusLine(snapshot: RookSnapshot | null, isRunning: boolean): string | undefined {
   const run = snapshot?.latest
 
-  if (run === undefined) {
+  if (run === undefined || snapshot === null) {
     return isRunning ? 'rook ▸ starting' : undefined
   }
 
-  const { pass, fail, unverifiable } = run.counts
-  const score = `✓${pass} ✗${fail} ?${unverifiable}`
-
   if (!run.finished) {
-    return `rook ▸ ${run.done}/${run.planned} · ${score}`
+    const lane = run.lanes[0]
+
+    return `rook ▸ ${run.done}/${run.planned}${lane ? ` · ${lane.id} ${lane.phase}` : ''} · ✓${run.counts.pass} ✗${run.counts.fail} ?${run.counts.unverifiable}`
   }
 
-  const previous = snapshot?.previous
-  const delta = previous === undefined ? 0 : pass - previous.passed
-  const trend = previous === undefined || delta === 0 ? '' : ` · ${delta > 0 ? '↑' : '↓'}${Math.abs(delta)} vs last`
+  const { pass, fail, unverifiable } = countsOf(snapshot.current)
   const gaps = unlooked(run).length
+  const { fixed, regressed } = changesIn(snapshot.current, run.runId)
+  const moved = [fixed.length > 0 ? `↑${fixed.length} fixed` : '', regressed.length > 0 ? `↓${regressed.length} regressed` : ''].filter(Boolean).join(' ')
 
-  return `rook ${score}${gaps > 0 ? ` · ${plural(gaps, 'gap')}` : ''}${trend}`
+  return `rook ✓${pass} ✗${fail} ?${unverifiable}${gaps > 0 ? ` · ${plural(gaps, 'gap')}` : ''}${moved ? ` · ${moved}` : ''}`
+}
+
+/** The turn's spinner while Claude waits on a rook run: where it is, at any terminal width. */
+export function spinnerText(run: RookRunView | undefined, running: RookRunning, now: number): string {
+  const elapsed = duration(Math.max(0, now - running.startedAt))
+
+  if (run === undefined || run.finished) {
+    return `rook: starting ${running.label} · ${elapsed}`
+  }
+
+  const lane = run.lanes[0]
+  const more = run.lanes.length > 1 ? ` +${run.lanes.length - 1}` : ''
+
+  return `rook ${run.done}/${run.planned}${lane ? ` · ${lane.id} ${lane.phase}${more}` : ''} · ${elapsed}${run.counts.fail > 0 ? ` · ${run.counts.fail} failing` : ''}`
 }
 
 export const progressBar = (done: number, planned: number, width: number): string => {
@@ -50,43 +105,114 @@ export const progressBar = (done: number, planned: number, width: number): strin
   return `${'█'.repeat(filled)}${'░'.repeat(cells - filled)}`
 }
 
+/** `pass rate 50% · 12.5 credits · 1m04s`. */
+export function metricsLine(run: RookRunView): string {
+  return [
+    run.passRate === undefined ? undefined : `pass rate ${Math.round(run.passRate * 100)}%`,
+    credits(run.credits),
+    run.durationMs === undefined ? undefined : duration(run.durationMs),
+  ]
+    .filter(Boolean)
+    .join(' · ')
+}
+
 /** One failing scenario as the model needs it to fix the agent. */
 export function failureNote(row: RookScenarioRow, verdictPath: string): string {
   const head = `${row.id}${row.title ? ` — ${row.title}` : ''}${row.compromised ? ' [COMPROMISED]' : ''}`
   const criteria = row.failing.slice(0, 6).map(c =>
     [
-      `  • ${c.id}: ${clip(c.criterion, 240)}`,
-      `    expected: ${clip(c.expected, 240)}`,
-      `    achieved: ${clip(c.achieved, 240)}`,
-      ...(c.evidence ? [`    evidence: ${clip(c.evidence, 240)}`] : []),
+      `  • ${c.id}: ${clip(c.criterion, 400)}`,
+      `    expected: ${clip(c.expected, 600)}`,
+      `    achieved: ${clip(c.achieved, 600)}`,
+      ...(c.evidence ? [`    evidence: ${indent(excerpt(c.evidence, 800), '      ')}`] : []),
     ].join('\n'),
   )
 
-  return [head, ...(criteria.length > 0 ? criteria : [`  ${clip(row.summary, 400)}`]), `  verdict: ${verdictPath}`].join('\n')
+  return [head, ...(criteria.length > 0 ? criteria : [`  ${clip(row.summary, 600)}`]), `  verdict: ${verdictPath}`].join('\n')
+}
+
+/** Whose fault rook says a cluster is, as an instruction. */
+const FAULT: Record<string, string> = {
+  agent: 'fix the agent',
+  scenario: 'rook thinks the SCENARIO is wrong, not the agent: say so rather than bending the agent to it',
+  harness: 'rook thinks the HARNESS is at fault (profile, hooks, environment): fix that, not the agent',
+  unclear: 'rook could not tell whose fault it is: check the evidence before changing the agent',
+}
+
+/** Clusters as Claude should work them: compromised first, then failures, then what could not be verified. */
+const KIND_ORDER = ['compromised', 'failed', 'unverifiable']
+
+export const orderedClusters = (run: RookRunView): RookCluster[] =>
+  [...run.clusters].sort((a, b) => (KIND_ORDER.indexOf(a.kind) + 4) % 4 - (KIND_ORDER.indexOf(b.kind) + 4) % 4)
+
+/** Was the cluster explained by --rca (rather than "not explained — out of credits")? */
+export const isExplained = (cluster: RookCluster): boolean => cluster.remedy !== undefined
+
+export function clusterNote(cluster: RookCluster, rows: ReadonlyMap<string, RookScenarioRow>, runDir: string): string {
+  const head = `${cluster.id} [${cluster.kind}] ${cluster.why} — ${plural(cluster.scenarios.length, 'scenario')}`
+  const rca = [
+    ...(cluster.cause ? [`  cause: ${indent(excerpt(cluster.cause, 1500), '    ')}`] : []),
+    ...(cluster.fault ? [`  fault: ${cluster.fault}${cluster.confidence ? ` · ${cluster.confidence} confidence` : ''} — ${FAULT[cluster.fault] ?? FAULT.unclear}`] : []),
+    ...(cluster.where.length > 0 ? [`  where: ${cluster.where.slice(0, 8).join(', ')}`] : []),
+    ...(cluster.remedy ? [`  remedy (rook's proposed change; check it against the code before applying):\n    ${indent(excerpt(cluster.remedy, 4000), '    ')}`] : []),
+  ]
+  const scenarios = cluster.scenarios.slice(0, 6).map(s => {
+    const row = rows.get(s.id)
+
+    return row !== undefined && row.status === 'Fail'
+      ? indent(failureNote(row, `${runDir}/scenarios/${s.id}/verdict.yaml`), '  ')
+      : `  ${s.id}${s.title ? ` — ${s.title}` : ''}${row && row.status !== 'Fail' ? ` (${row.status}: ${gapText(row, 200)})` : ''}`
+  })
+  const more = cluster.scenarios.length > 6 ? [`  …and ${cluster.scenarios.length - 6} more in this cluster`] : []
+
+  return [head, ...rca, ...scenarios, ...more].join('\n')
+}
+
+function gapLines(run: RookRunView): string[] {
+  return unlooked(run)
+    .slice(0, 8)
+    .map(row => `  ? ${row.id}${row.reason ? ` (${reasonText(row.reason)})` : ''}: ${gapText(row, 300)}`)
+}
+
+function tailOf(run: RookRunView): string[] {
+  return [
+    ...(run.narrative ? ['', `rook's read: ${clip(run.narrative, 900)}`] : []),
+    ...(run.next.length > 0 ? ['', 'rook suggests next:', ...run.next.slice(0, 5).map(step => `  · ${clip(step, 300)}`)] : []),
+  ]
 }
 
 export function failureContext(run: RookRunView, agentDir: string, agentId: string): string {
-  const failed = run.rows.filter(row => row.status === 'Fail')
   const runDir = `${agentDir}/runs/${run.runId}`
-  const notes = failed.slice(0, 10).map(row => failureNote(row, `${runDir}/scenarios/${row.id}/verdict.yaml`))
-  const more = failed.length > 10 ? [`…and ${failed.length - 10} more failing scenarios in ${runDir}/scenarios/`] : []
-  const gaps = unlooked(run)
-    .slice(0, 8)
-    .map(row => `  ? ${row.id}: ${row.reason ?? 'gap'}${row.gaps.length > 0 ? ` — ${clip(row.gaps.join('; '), 200)}` : ''}`)
+  const rows = new Map(run.rows.map(row => [row.id, row]))
+  const clusters = orderedClusters(run).filter(cluster => cluster.kind !== 'unverifiable')
+  const clustered = new Set(clusters.flatMap(cluster => cluster.scenarios.map(s => s.id)))
+  const loose = run.rows.filter(row => row.status === 'Fail' && !clustered.has(row.id))
+  const notes = loose.slice(0, 10).map(row => failureNote(row, `${runDir}/scenarios/${row.id}/verdict.yaml`))
+  const more = loose.length > 10 ? [`…and ${loose.length - 10} more failing scenarios in ${runDir}/scenarios/`] : []
+  const gaps = gapLines(run)
+  const explained = clusters.some(isExplained)
+  const unexplained = clusters.length > 0 && !explained
 
   return [
     `rook run ${run.runId}${run.name ? ` (${run.name})` : ''} against agent ${agentId} finished: ` +
-      `${run.counts.pass} Pass, ${run.counts.fail} Fail, ${run.counts.unverifiable} Unable to Verify.`,
+      `${run.counts.pass} Pass, ${run.counts.fail} Fail, ${run.counts.unverifiable} Unable to Verify.` +
+      `${metricsLine(run) ? ` ${metricsLine(run)}.` : ''}`,
     ...(run.headline ? [`Headline: ${clip(run.headline, 300)}`] : []),
-    '',
-    'Failing scenarios (criterion, expected vs achieved, quoted evidence):',
-    ...notes,
-    ...more,
-    ...(gaps.length > 0
-      ? ['', 'Not verified — Unable to Verify is not Fail; these are what nobody looked at:', ...gaps]
+    ...(clusters.length > 0
+      ? [
+          '',
+          `Failures grouped by root shape (${plural(clusters.length, 'cluster')}; one fix often clears a whole cluster):`,
+          ...clusters.slice(0, 8).map(cluster => clusterNote(cluster, rows, runDir)),
+          ...(clusters.length > 8 ? [`…and ${clusters.length - 8} more clusters in ${runDir}/report.yaml`] : []),
+        ]
       : []),
+    ...(notes.length > 0 ? ['', 'Failing scenarios (criterion, expected vs achieved, quoted evidence):', ...notes, ...more] : []),
+    ...(gaps.length > 0 ? ['', 'Not verified — Unable to Verify is not Fail; these are what nobody looked at:', ...gaps] : []),
+    ...tailOf(run),
     '',
-    'Fix the agent where the evidence shows its behaviour is wrong. If a criterion itself looks wrong, say so rather than bending the agent to it. Re-test with the rook run tool, passing only the scenario ids you touched.',
+    'Fix the agent where the evidence shows its behaviour is wrong. If a criterion itself looks wrong, say so rather than bending the agent to it. ' +
+      'Re-test with the rook run tool, passing only the scenario ids you touched.' +
+      (unexplained ? ' To have rook explain the clusters (cause, whose fault, a proposed diff), re-run with rca: true; it costs extra credits.' : ''),
   ].join('\n')
 }
 
@@ -95,20 +221,20 @@ export function runSummary(run: RookRunView, agentDir: string, agentId: string, 
     return failureContext(run, agentDir, agentId) + (totalCredits === undefined ? '' : `\nSpent: ${credits(totalCredits)}.`)
   }
 
-  const gaps = unlooked(run)
+  const gaps = gapLines(run)
+  const rows = new Map(run.rows.map(row => [row.id, row]))
+  const runDir = `${agentDir}/runs/${run.runId}`
+  const clusters = orderedClusters(run)
 
   return [
     `rook run ${run.runId} against agent ${agentId}: ${run.counts.pass} Pass, 0 Fail, ${run.counts.unverifiable} Unable to Verify` +
-      ` (${run.done}/${run.planned} judged).`,
+      ` (${run.done}/${run.planned} judged).${metricsLine(run) ? ` ${metricsLine(run)}.` : ''}`,
     ...(run.headline ? [`Headline: ${clip(run.headline, 300)}`] : []),
-    ...(gaps.length > 0
-      ? [
-          'Pass, and here is what nobody looked at:',
-          ...gaps.slice(0, 8).map(row => `  ? ${row.id}: ${row.reason ?? 'gap'}${row.gaps.length ? ` — ${clip(row.gaps.join('; '), 200)}` : ''}`),
-        ]
-      : []),
+    ...(gaps.length > 0 ? ['Nothing failed. Unable to Verify is not Pass either; here is what nobody looked at:', ...gaps] : []),
+    ...(clusters.length > 0 ? ['', ...clusters.slice(0, 6).map(cluster => clusterNote(cluster, rows, runDir))] : []),
+    ...tailOf(run),
     ...(totalCredits === undefined ? [] : [`Spent: ${credits(totalCredits)}.`]),
-    `Evidence: ${agentDir}/runs/${run.runId}/`,
+    `Evidence: ${runDir}/`,
   ].join('\n')
 }
 
@@ -116,18 +242,70 @@ export function staleLine(stale: RookStale): string {
   const [first, ...rest] = stale.files
   const files = `${first ?? ''}${rest.length > 0 ? ` (+${rest.length})` : ''}`
   const reach = stale.isWholeAgent ? `all ${plural(stale.scenarios.length, 'scenario')} may be affected` : `${plural(stale.scenarios.length, 'scenario')} touch it`
+  const cost = stale.estimate === undefined ? '' : ` · ~${credits(stale.estimate)}`
 
-  return `Agent changed since last run: ${files} · ${reach}`
+  return `Agent changed since last run: ${files} · ${reach}${cost}`
 }
 
 export function retestPrompt(stale: RookStale): string {
   const ids = stale.scenarios.map(s => s.id)
   const scope = stale.isWholeAgent || ids.length === 0 ? 'every scenario' : `scenarios ${ids.join(', ')}`
+  const cost = stale.estimate === undefined ? '' : ` That is about ${credits(stale.estimate)} at the last run's rate.`
+  const narrow =
+    stale.isWholeAgent && ids.length > 1
+      ? ' No feature cites the changed file, so every scenario may be affected; if you can tell from the change which scenarios it reaches, run only those.'
+      : ''
 
   return (
     `The agent under test changed (${stale.files.join(', ')}). Use the rook run tool to re-test ${scope}` +
-    `${stale.isWholeAgent || ids.length === 0 ? '' : ' (pass them as `only`)'}, then fix anything that fails, quoting rook's evidence.`
+    `${stale.isWholeAgent || ids.length === 0 ? '' : ' (pass them as `only`)'}, then fix anything that fails, quoting rook's evidence.${cost}${narrow}`
   )
+}
+
+/** Credits per executed scenario in a finished run, for estimates. */
+export const creditsPerScenario = (run: RookRunView | undefined): number | undefined =>
+  run?.finished && run.credits !== undefined && run.done > 0 ? run.credits / run.done : undefined
+
+/**
+ * `rook scenarios list --json`, with each scenario's latest verdict: what
+ * Claude needs to choose `only` without guessing ids.
+ */
+export function scenariosText(doc: unknown, current: readonly RookCurrent[]): string {
+  type Scenario = {
+    scenario_id?: string
+    title?: string
+    feature_id?: string
+    class?: string
+    category?: string
+    excluded?: boolean
+    unrunnable?: unknown
+  }
+  const list = doc as { agent_id?: string; profile_id?: string; total?: number; runnable?: number; scenarios?: Scenario[] }
+  const scenarios = Array.isArray(list?.scenarios) ? list.scenarios : []
+  const verdicts = new Map(current.map(row => [row.id, row]))
+
+  if (scenarios.length === 0) {
+    return 'rook: this agent has no scenarios yet. Use the rook generate tool to write some.'
+  }
+
+  return [
+    `rook scenarios for agent ${list.agent_id ?? '?'} (profile ${list.profile_id ?? '?'}): ${list.runnable ?? '?'} runnable of ${list.total ?? scenarios.length}`,
+    ...scenarios.map(s => {
+      const verdict = s.scenario_id === undefined ? undefined : verdicts.get(s.scenario_id)
+      const unrunnable = s.unrunnable === null || s.unrunnable === undefined ? undefined : clip(typeof s.unrunnable === 'string' ? s.unrunnable : JSON.stringify(s.unrunnable), 120)
+
+      return [
+        `  ${s.scenario_id ?? '?'}`,
+        [s.feature_id, s.class, s.category].filter(Boolean).join('/'),
+        clip(s.title ?? '', 100),
+        verdict ? `last: ${verdict.status} (${verdict.runId})` : 'never run',
+        s.excluded ? 'EXCLUDED' : undefined,
+        unrunnable ? `cannot run: ${unrunnable}` : undefined,
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    }),
+  ].join('\n')
 }
 
 type ChangeSet = { added?: unknown[]; changed?: unknown[]; removed?: unknown[] }
@@ -194,5 +372,29 @@ export function statusText(doc: unknown): string {
             `${last.passed ?? 0} Pass · ${last.failed ?? 0} Fail · ${last.unverifiable ?? 0} Unable to Verify` +
             `${last.credits_charged === undefined ? '' : ` · ${credits(last.credits_charged)}`}`,
         ]),
+  ].join('\n')
+}
+
+/** `rook generate --json` in a few lines: what was written, what was left, and why. */
+export function generateText(doc: unknown): string {
+  type Declined = { feature_id?: string; local_id?: string; reason?: string; why?: string }
+  const result = doc as { written?: string[]; skipped?: string[]; declined?: Declined[]; gaps?: string[]; credits?: number; summaries?: string[] } | undefined
+  const written = Array.isArray(result?.written) ? result.written : []
+  const skipped = Array.isArray(result?.skipped) ? result.skipped : []
+  const declined = Array.isArray(result?.declined) ? result.declined : []
+  const gaps = Array.isArray(result?.gaps) ? result.gaps : []
+  const summaries = Array.isArray(result?.summaries) ? result.summaries : []
+
+  return [
+    `rook generate: ${plural(written.length, 'scenario file')} written${skipped.length > 0 ? `, ${plural(skipped.length, 'feature')} already covered` : ''}` +
+      `${result?.credits === undefined ? '' : ` · ${credits(result.credits)}`}.`,
+    ...written.slice(0, 40).map(path => `  + ${path}`),
+    ...(written.length > 40 ? [`  …and ${written.length - 40} more`] : []),
+    ...summaries.slice(0, 6).map(line => `  ${clip(line, 300)}`),
+    ...(declined.length > 0
+      ? ['Features the planner decided need nothing:', ...declined.slice(0, 10).map(d => `  - ${d.feature_id ?? d.local_id ?? '?'}: ${clip(d.reason ?? d.why ?? '', 200)}`)]
+      : []),
+    ...(gaps.length > 0 ? ['Gaps the writers named (what these scenarios cannot cover):', ...gaps.slice(0, 10).map(gap => `  ? ${clip(gap, 240)}`)] : []),
+    ...(written.length > 0 ? ['Run the new scenarios with the rook run tool; the rook scenarios tool lists their ids.'] : []),
   ].join('\n')
 }

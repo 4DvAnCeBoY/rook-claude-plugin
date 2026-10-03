@@ -23,6 +23,8 @@ export type World = {
   status: { stdout: string; code: number }
   /** When set, `$.process` cannot start the binary at all. */
   isMissingBinary: boolean
+  /** Called while a spawned rook is running, before it prints. */
+  during: (() => Promise<void>) | undefined
 }
 
 const relOf = (path: string) => (path.startsWith(`${CWD}/`) ? path.slice(CWD.length + 1) : path.replace(/^\.\//, ''))
@@ -41,6 +43,7 @@ export function worldOf(on: On, files: Readonly<Record<string, string>>, env: Re
     onRun: () => ({ stdout: JSON.stringify({ ok: true, halted: false, credits: 0 }), code: 0 }),
     status: { stdout: JSON.stringify({ project_id: 'P', offline: false, agents: [] }), code: 0 },
     isMissingBinary: false,
+    during: undefined,
   }
 
   on('fs.read', ($, e) => {
@@ -85,8 +88,16 @@ export function worldOf(on: On, files: Readonly<Record<string, string>>, env: Re
       world.files.set(path, text)
     }
 
+    await world.during?.()
     yield { stream: 'stderr' as const, text: 'running…\n' }
-    yield { stream: 'stdout' as const, text: ran.stdout }
+    if (ran.stdout !== '') {
+      yield { stream: 'stdout' as const, text: ran.stdout }
+    }
+
+    // `rook ui --local` serves until it is stopped
+    if (e.argv[1] === 'ui') {
+      await new Promise(() => undefined)
+    }
 
     return { value: { code: ran.code, signal: null } } as never
   })
@@ -136,6 +147,8 @@ export function worldOf(on: On, files: Readonly<Record<string, string>>, env: Re
   })
 
   on('session.start', ($, e) => ({ cwd: e.cwd }))
+  // the spinner as the engine draws it: its message while one overrides the word
+  on('ui.render', { component: 'Spinner' }, ($, e) => ({ type: 'Text', children: [e.props.message ?? e.props.word] }) as never)
   // what the engine draws where no plugin draws: never a Box, so a test tells the plugin's own apart
   on('ui.render', () => ({ type: 'Text', children: [''] }) as never)
 

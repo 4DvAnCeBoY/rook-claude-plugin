@@ -1,3 +1,5 @@
+import { RUN_ID } from './workspace'
+
 /**
  * Driving the rook CLI through its published headless contract: one JSON
  * document on stdout, prose on stderr, exit 0 for a finished command (a run
@@ -8,35 +10,95 @@ export type RunRequest = {
   only?: string[]
   class?: 'functional' | 'non-functional' | 'adversarial'
   category?: string
+  tags?: string[]
+  profile?: string
   name?: string
+  concurrency?: number
+  /** A finished run whose work a new run carries forward. */
+  resume?: string
+  /** Continue this run in place; needs `phases`. */
+  continueRun?: string
+  phases?: string[]
   test?: boolean
   rca?: boolean
+  /** Free text for rook's run planner, passed after `--`. */
+  instruction?: string
 }
 
+export type GenerateRequest = {
+  total?: number
+  classes?: string[]
+  categories?: string[]
+  force?: boolean
+  instruction?: string
+}
+
+/**
+ * How rook's own tool calls (its explorer, judge, planner reading code or
+ * running commands) are approved in a headless command: `--yes` approves every
+ * one for that command; `--allow` rules approve only those, and rook declines
+ * the rest.
+ */
+export type Approval = { allowRules: readonly string[] }
+
 const CLASSES = ['functional', 'non-functional', 'adversarial'] as const
+const PHASE_NAMES = ['prepare', 'open', 'execute', 'close', 'collect', 'judge'] as const
 const SCENARIO = /^SC-\d{1,6}$/
 const WORD = /^[a-z0-9][a-z0-9_-]{0,63}$/i
+const PROFILE = /^[\w.-]{1,64}$/
+const CONTROL = /[\u0000-\u001f\u007f]/
+
+const printable = (text: string, max: number) => text !== '' && text.length <= max && !text.startsWith('-') && !CONTROL.test(text)
+
+/** `allowRules` as typed in settings: rules separated by `;` or new lines. */
+export function allowRulesOf(text: string): string[] {
+  return text
+    .split(/[;\n]/)
+    .map(rule => rule.trim())
+    .filter(rule => rule !== '' && printable(rule, 200))
+}
+
+function approvalArgs(approval: Approval): string[] {
+  return approval.allowRules.length === 0 ? ['--yes'] : approval.allowRules.flatMap(rule => ['--allow', rule])
+}
+
+function words(label: string, values: unknown, check: RegExp, max: number): string[] | { error: string } {
+  if (!Array.isArray(values) || values.length === 0 || values.length > max) {
+    return { error: `\`${label}\` must list between 1 and ${max} values` }
+  }
+
+  const bad = values.filter(value => typeof value !== 'string' || !check.test(value))
+
+  return bad.length > 0 ? { error: `not valid ${label}: ${bad.slice(0, 5).map(String).join(', ')}` } : [...new Set(values as string[])]
+}
+
+function instructionArgs(instruction: unknown): string[] | { error: string } {
+  if (instruction === undefined) {
+    return []
+  }
+
+  const text = typeof instruction === 'string' ? instruction.replace(/\s+/g, ' ').trim() : ''
+
+  return text === '' || text.length > 2000 || CONTROL.test(text) ? { error: 'instruction must be 1-2000 printable characters' } : ['--', text]
+}
 
 /**
  * The run flags the mod passes, checked one by one. Nothing a caller gives
- * reaches argv unchecked: a value is a scenario id, a known class, a plain
- * word, or a name without control characters, and nothing begins with `-`.
+ * reaches argv unchecked: a value is a scenario id, a known class or phase, a
+ * plain word, a run id, a bounded number, or text without control characters
+ * that does not begin with `-`; the instruction goes after `--`.
  */
-export function runArgs(request: RunRequest): { argv: string[] } | { error: string } {
-  const argv = ['run', '--yes', '--json']
+export function runArgs(request: RunRequest, approval: Approval = { allowRules: [] }): { argv: string[] } | { error: string } {
+  const argv = ['run', ...approvalArgs(approval), '--json']
 
   if (request.only !== undefined) {
-    if (!Array.isArray(request.only) || request.only.length === 0 || request.only.length > 200) {
-      return { error: '`only` must list between 1 and 200 scenario ids' }
+    const ids = words('only', request.only, SCENARIO, 200)
+
+    if ('error' in ids) {
+      return { error: ids.error.replace('not valid only', 'not scenario ids (SC-001 form)') }
     }
 
-    const bad = request.only.filter(id => typeof id !== 'string' || !SCENARIO.test(id))
-
-    if (bad.length > 0) {
-      return { error: `not scenario ids (SC-001 form): ${bad.slice(0, 5).join(', ')}` }
-    }
-
-    argv.push('--only', [...new Set(request.only)].join(','))
+    argv.push('--only', ids.join(','))
   }
 
   if (request.class !== undefined) {
@@ -55,14 +117,74 @@ export function runArgs(request: RunRequest): { argv: string[] } | { error: stri
     argv.push('--category', request.category)
   }
 
+  if (request.tags !== undefined) {
+    const tags = words('tags', request.tags, WORD, 20)
+
+    if ('error' in tags) {
+      return tags
+    }
+
+    argv.push('--tag', tags.join(','))
+  }
+
+  if (request.profile !== undefined) {
+    if (typeof request.profile !== 'string' || !PROFILE.test(request.profile) || request.profile.startsWith('-')) {
+      return { error: 'profile must be a profile id: letters, digits, ., - or _' }
+    }
+
+    argv.push('--profile', request.profile)
+  }
+
   if (request.name !== undefined) {
     const name = typeof request.name === 'string' ? request.name.trim() : ''
 
-    if (name === '' || name.length > 120 || name.startsWith('-') || /[\u0000-\u001f\u007f]/.test(name)) {
+    if (!printable(name, 120)) {
       return { error: 'name must be 1-120 printable characters and not start with -' }
     }
 
     argv.push('--name', name)
+  }
+
+  if (request.concurrency !== undefined) {
+    if (!Number.isInteger(request.concurrency) || request.concurrency < 1 || request.concurrency > 8) {
+      return { error: 'concurrency must be a whole number from 1 to 8' }
+    }
+
+    argv.push('--concurrency', String(request.concurrency))
+  }
+
+  if (request.resume !== undefined && request.continueRun !== undefined) {
+    return { error: 'resume starts a new run and continueRun continues one in place: pass one of them' }
+  }
+
+  if (request.resume !== undefined) {
+    if (typeof request.resume !== 'string' || !RUN_ID.test(request.resume)) {
+      return { error: 'resume must be a run id (2026-09-28T15-54-56Z form)' }
+    }
+
+    argv.push('--resume', request.resume)
+  }
+
+  if (request.continueRun !== undefined) {
+    if (typeof request.continueRun !== 'string' || !RUN_ID.test(request.continueRun)) {
+      return { error: 'continueRun must be a run id (2026-09-28T15-54-56Z form)' }
+    }
+
+    if (request.phases === undefined) {
+      return { error: 'continueRun needs phases: which phases to run against it, e.g. ["collect", "judge"]' }
+    }
+
+    argv.push('--run', request.continueRun)
+  }
+
+  if (request.phases !== undefined) {
+    const phases = words('phases', request.phases, new RegExp(`^(${PHASE_NAMES.join('|')})$`), PHASE_NAMES.length)
+
+    if ('error' in phases) {
+      return { error: `${phases.error} (phases are ${PHASE_NAMES.join(', ')})` }
+    }
+
+    argv.push('--phases', phases.join(','))
   }
 
   if (request.test === true) {
@@ -73,22 +195,71 @@ export function runArgs(request: RunRequest): { argv: string[] } | { error: stri
     argv.push('--rca')
   }
 
-  return { argv }
+  const tail = instructionArgs(request.instruction)
+
+  return 'error' in tail ? tail : { argv: [...argv, ...tail] }
 }
 
-/** `/rook run --only SC-001,SC-002 --class adversarial --test` → a request. */
+/** `rook generate`: write scenarios for the active agent. */
+export function generateArgs(request: GenerateRequest, approval: Approval = { allowRules: [] }): { argv: string[] } | { error: string } {
+  const argv = ['generate', ...approvalArgs(approval), '--json']
+
+  if (request.total !== undefined) {
+    if (!Number.isInteger(request.total) || request.total < 1 || request.total > 500) {
+      return { error: 'total must be a whole number from 1 to 500' }
+    }
+
+    argv.push('--total', String(request.total))
+  }
+
+  if (request.classes !== undefined) {
+    const classes = words('classes', request.classes, /^(functional|non[-_]functional|adversarial)$/, 3)
+
+    if ('error' in classes) {
+      return classes
+    }
+
+    argv.push('--class', classes.join(','))
+  }
+
+  if (request.categories !== undefined) {
+    const categories = words('categories', request.categories, WORD, 20)
+
+    if ('error' in categories) {
+      return categories
+    }
+
+    argv.push('--category', categories.join(','))
+  }
+
+  if (request.force === true) {
+    argv.push('--force')
+  }
+
+  const tail = instructionArgs(request.instruction)
+
+  return 'error' in tail ? tail : { argv: [...argv, ...tail] }
+}
+
+const RUN_OPTIONS = 'Use --only SC-001,SC-002 · --class · --category · --tag · --profile · --name · --concurrency · --resume · --test · --rca · -- <instruction>'
+
+/** `/rook run --only SC-001,SC-002 --class adversarial --test -- focus on refunds` → a request. */
 export function parseRunFlags(text: string): RunRequest | { error: string } {
-  const words = text.trim() === '' ? [] : text.trim().split(/\s+/)
-  const request: RunRequest = {}
+  const dashes = text.search(/(^|\s)--(\s|$)/)
+  const head = dashes < 0 ? text : text.slice(0, dashes)
+  const instruction = dashes < 0 ? '' : text.slice(dashes).replace(/^\s*--/, '').trim()
+  const words = head.trim() === '' ? [] : head.trim().split(/\s+/)
+  const request: RunRequest = instruction === '' ? {} : { instruction }
 
   for (let i = 0; i < words.length; i += 1) {
     const word = words[i]!
     const [flag, inline] = word.includes('=') ? [word.slice(0, word.indexOf('=')), word.slice(word.indexOf('=') + 1)] : [word, undefined]
     const value = () => inline ?? words[++i]
+    const list = () => (value() ?? '').split(',').filter(Boolean)
 
     switch (flag) {
       case '--only':
-        request.only = (value() ?? '').split(',').filter(Boolean)
+        request.only = list()
         break
       case '--class':
         request.class = value() as RunRequest['class']
@@ -96,8 +267,26 @@ export function parseRunFlags(text: string): RunRequest | { error: string } {
       case '--category':
         request.category = value()
         break
+      case '--tag':
+        request.tags = list()
+        break
+      case '--profile':
+        request.profile = value()
+        break
       case '--name':
         request.name = value()
+        break
+      case '--concurrency':
+        request.concurrency = Number(value())
+        break
+      case '--resume':
+        request.resume = value()
+        break
+      case '--run':
+        request.continueRun = value()
+        break
+      case '--phases':
+        request.phases = list()
         break
       case '--test':
         request.test = true
@@ -111,7 +300,41 @@ export function parseRunFlags(text: string): RunRequest | { error: string } {
           break
         }
 
-        return { error: `unknown run option: ${word}. Use --only SC-001,SC-002 · --class · --category · --name · --test · --rca` }
+        return { error: `unknown run option: ${word}. ${RUN_OPTIONS}` }
+    }
+  }
+
+  return request
+}
+
+/** `/rook generate --total 20 --class adversarial -- the new returns flow` → a request. */
+export function parseGenerateFlags(text: string): GenerateRequest | { error: string } {
+  const dashes = text.search(/(^|\s)--(\s|$)/)
+  const head = dashes < 0 ? text : text.slice(0, dashes)
+  const instruction = dashes < 0 ? '' : text.slice(dashes).replace(/^\s*--/, '').trim()
+  const words = head.trim() === '' ? [] : head.trim().split(/\s+/)
+  const request: GenerateRequest = instruction === '' ? {} : { instruction }
+
+  for (let i = 0; i < words.length; i += 1) {
+    const word = words[i]!
+    const [flag, inline] = word.includes('=') ? [word.slice(0, word.indexOf('=')), word.slice(word.indexOf('=') + 1)] : [word, undefined]
+    const value = () => inline ?? words[++i] ?? ''
+
+    switch (flag) {
+      case '--total':
+        request.total = Number(value())
+        break
+      case '--class':
+        request.classes = value().split(',').filter(Boolean)
+        break
+      case '--category':
+        request.categories = value().split(',').filter(Boolean)
+        break
+      case '--force':
+        request.force = true
+        break
+      default:
+        return { error: `unknown generate option: ${word}. Use --total · --class · --category · --force · -- <what to cover>` }
     }
   }
 
