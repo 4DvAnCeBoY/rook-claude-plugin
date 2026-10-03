@@ -191,7 +191,7 @@ describe('2 · the pane', () => {
 
     expect((await ui.find({ key: 's-project' }))?.text).toBe('✗ no project selected')
     expect((await ui.find({ key: 's-agent' }))?.text).toBe('✗ no agent yet')
-    expect((await ui.find({ key: 'next' }))?.text).toContain('mcp__rook__project')
+    expect((await ui.find({ key: 'next' }))?.text).toContain('/rook project use <id>')
     expect(await ui.findAll({ type: 'Button' })).toHaveLength(0)
   })
 

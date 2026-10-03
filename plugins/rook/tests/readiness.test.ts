@@ -51,7 +51,7 @@ describe('readiness', () => {
     const readiness = readinessOf(await diskFacts(ioOver({ 'README.md': '# hi' })), SIGNED_IN)
 
     expect(readiness.hasWorkspace).toBe(false)
-    expect(readiness.next).toBe('ask Claude to select a project (mcp__rook__project), or run `! rook project use <id>`')
+    expect(readiness.next).toBe('type `/rook project` to see your projects and `/rook project use <id>` to pick one, or ask Claude to set rook up')
     expect(readiness.steps.filter(step => !step.ok).map(step => step.id)).toEqual(['project', 'agent', 'scenarios', 'profile'])
     expect(setupLine(readiness)).toBeUndefined()
   })
@@ -63,7 +63,7 @@ describe('readiness', () => {
     expect(disk.agentId).toBe('commercecare')
     expect(readiness.steps.find(step => step.id === 'project')).toMatchObject({ ok: false, label: 'no project selected' })
     expect(blockedText(readiness, NEEDS.run, 'run')).toBe(
-      "can't run yet: no project selected. Next: ask Claude to select a project (mcp__rook__project), or run `! rook project use <id>`.",
+      "can't run yet: no project selected. Next: type `/rook project` to see your projects and `/rook project use <id>` to pick one, or ask Claude to set rook up.",
     )
     expect(setupLine(readiness)).toBe('setup: select a project')
   })
@@ -78,20 +78,20 @@ describe('readiness', () => {
   test('an agent: none explored, several and none active', async () => {
     const none = readinessOf(await diskFacts(ioOver(without(workspace(), '/agents/'))), SIGNED_IN)
 
-    expect(none.next).toBe('ask Claude to explore the repo (mcp__rook__explore), or run `! rook explore .`')
+    expect(none.next).toBe('ask Claude to explore the repo with rook, or type `/rook explore` (it reads the code and spends credits)')
 
     const files = workspace({ [AGENT_DIR.replace('commercecare', 'billing') + '/agent.yaml']: 'id: billing\n' })
     delete files['.testmuai/rook/projects/shop--01M0EXAMP1EPR0JECT0000000A/active']
     const several = readinessOf(await diskFacts(ioOver(files)), SIGNED_IN)
 
     expect(several.steps.find(step => step.id === 'agent')).toMatchObject({ ok: false, label: 'no active agent (2 on disk)' })
-    expect(several.next).toBe('run `! rook agent use <id>` — one of billing, commercecare')
+    expect(several.next).toBe('type `/rook agent use <id>` — one of billing, commercecare')
   })
 
   test('scenarios, then a profile: generate, then add one (or pick one)', async () => {
     const bare = readinessOf(await diskFacts(ioOver(without(without(without(workspace(), '/scenarios/'), '/profiles/'), '/runs/'))), SIGNED_IN)
 
-    expect(bare.next).toBe('ask Claude to generate scenarios (mcp__rook__generate)')
+    expect(bare.next).toBe('ask Claude to write scenarios, or type `/rook generate` (spends credits)')
     expect(blockedText(bare, NEEDS.generate, 'generate scenarios')).toBeUndefined()
     expect(bare.steps.find(step => step.id === 'profile')?.hint).toBe('run `! rook profile add <name>` yourself (it asks questions)')
 
@@ -99,7 +99,7 @@ describe('readiness', () => {
     delete two[`${AGENT_DIR}/profiles/active`]
     const unpicked = readinessOf(await diskFacts(ioOver(two)), SIGNED_IN)
 
-    expect(unpicked.next).toBe('run `! rook profile use <id>` — one of commerce-http, staging')
+    expect(unpicked.next).toBe('type `/rook profile use <id>` — one of commerce-http, staging')
   })
 
   test('CLI facts: not installed, signed out; unprobed is not a refusal', async () => {
@@ -125,7 +125,7 @@ describe('readiness', () => {
         '  ✗ no agent yet',
         '  ✗ no scenarios',
         '  ✗ no profile',
-        'Next: ask Claude to select a project (mcp__rook__project), or run `! rook project use <id>`.',
+        'Next: type `/rook project` to see your projects and `/rook project use <id>` to pick one, or ask Claude to set rook up.',
       ].join('\n'),
     )
   })

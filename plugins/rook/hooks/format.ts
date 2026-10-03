@@ -24,8 +24,16 @@ export const excerpt = (text: string, max: number): string => {
 
 const indent = (text: string, by: string) => text.split('\n').join(`\n${by}`)
 
-export const credits = (value: number | undefined): string | undefined =>
-  value === undefined ? undefined : `${Number(value.toFixed(2))} credits`
+/** `12.5 credits`; from a thousand up, whole and grouped: `9,959,944 credits`. */
+export const credits = (value: number | undefined): string | undefined => {
+  if (value === undefined) {
+    return undefined
+  }
+
+  const shown = Math.abs(value) >= 1000 ? String(Math.round(value)).replace(/\B(?=(\d{3})+(?!\d))/g, ',') : String(Number(value.toFixed(2)))
+
+  return `${shown} credits`
+}
 
 /** `4m12s`, `33.1s`, `850ms`. */
 export function duration(ms: number): string {

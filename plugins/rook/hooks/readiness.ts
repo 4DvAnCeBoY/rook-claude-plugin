@@ -31,6 +31,8 @@ export type DiskFacts = {
   hasWorkspace: boolean
   settingsText?: string
   projectId?: string
+  /** The selected project's name from its project.yaml, when rook has written one. */
+  projectName?: string
   agents: string[]
   /** The agent rook would act on: the one `active` names, or the only one. */
   agentId?: string
@@ -86,6 +88,12 @@ export async function diskFacts(io: Io): Promise<DiskFacts> {
   }
 
   const projectDir = `${ROOT}/projects/${project}`
+  const projectName = /^name:\s*(.+?)\s*$/m.exec((await io.read(`${projectDir}/project.yaml`)) ?? '')?.[1]?.replace(/^(['"])(.*)\1$/, '$2')
+
+  if (projectName !== undefined && projectId !== undefined && project !== undefined && (project === projectId || project.endsWith(`--${projectId}`))) {
+    facts.projectName = projectName
+  }
+
   const agents = (await names(io, `${projectDir}/agents`, 'dir')).sort()
   const active = (await io.read(`${projectDir}/active`))?.trim()
   // One agent is not a choice, so rook takes it without a pointer; several is.
@@ -117,26 +125,26 @@ export function readinessOf(disk: DiskFacts, cli: CliFacts): RookReadiness {
       ? { id: 'signed_in', label: 'not signed in', ok: false, hint: 'run `! rook login` (it opens a browser)' }
       : { id: 'signed_in', label: cli.auth === 'in' ? 'signed in' : 'sign-in not checked', ok: true },
     isProject
-      ? { id: 'project', label: `project ${disk.projectId}`, ok: true }
+      ? { id: 'project', label: `project ${disk.projectName ?? disk.projectId}`, ok: true }
       : {
           id: 'project',
           label: disk.projectId === undefined ? 'no project selected' : `project ${disk.projectId} is not accepted by rook`,
           ok: false,
-          hint: 'ask Claude to select a project (mcp__rook__project), or run `! rook project use <id>`',
+          hint: 'type `/rook project` to see your projects and `/rook project use <id>` to pick one, or ask Claude to set rook up',
         },
     disk.agentId !== undefined
       ? { id: 'agent', label: `agent ${disk.agentId}`, ok: true }
       : disk.agents.length === 0
-        ? { id: 'agent', label: 'no agent yet', ok: false, hint: 'ask Claude to explore the repo (mcp__rook__explore), or run `! rook explore .`' }
-        : { id: 'agent', label: `no active agent (${disk.agents.length} on disk)`, ok: false, hint: `run \`! rook agent use <id>\`${oneOf(disk.agents)}` },
+        ? { id: 'agent', label: 'no agent yet', ok: false, hint: 'ask Claude to explore the repo with rook, or type `/rook explore` (it reads the code and spends credits)' }
+        : { id: 'agent', label: `no active agent (${disk.agents.length} on disk)`, ok: false, hint: `type \`/rook agent use <id>\`${oneOf(disk.agents)}` },
     disk.scenarios > 0
       ? { id: 'scenarios', label: `${disk.scenarios} scenario${disk.scenarios === 1 ? '' : 's'}`, ok: true }
-      : { id: 'scenarios', label: 'no scenarios', ok: false, hint: 'ask Claude to generate scenarios (mcp__rook__generate)' },
+      : { id: 'scenarios', label: 'no scenarios', ok: false, hint: 'ask Claude to write scenarios, or type `/rook generate` (spends credits)' },
     disk.profileId !== undefined
       ? { id: 'profile', label: `profile ${disk.profileId}`, ok: true }
       : disk.profiles.length === 0
         ? { id: 'profile', label: 'no profile', ok: false, hint: 'run `! rook profile add <name>` yourself (it asks questions)' }
-        : { id: 'profile', label: 'no active profile', ok: false, hint: `run \`! rook profile use <id>\`${oneOf(disk.profiles)}` },
+        : { id: 'profile', label: 'no active profile', ok: false, hint: `type \`/rook profile use <id>\`${oneOf(disk.profiles)}` },
   ]
   const next = steps.find(step => !step.ok)?.hint
 

@@ -15,7 +15,7 @@ type Ran = { result?: unknown; deny?: string; text?: string }
 const asText = (ran: Ran): string => (typeof ran.result === 'string' ? ran.result : (ran.deny ?? ran.text ?? JSON.stringify(ran)))
 
 const YAML_SETTINGS = "version: 1\ncreated: '2026-09-20T10:00:00.000Z'\nactive_entity: null\n"
-const NO_PROJECT = "can't run yet: no project selected. Next: ask Claude to select a project (mcp__rook__project), or run `! rook project use <id>`."
+const NO_PROJECT = "can't run yet: no project selected. Next: type `/rook project` to see your projects and `/rook project use <id>` to pick one, or ask Claude to set rook up."
 
 /** A workspace with results whose settings select no project: rook would refuse to run. */
 const noProject = () => workspace({ '.testmuai/rook/settings.json': YAML_SETTINGS })
@@ -52,10 +52,10 @@ describe('readiness · no workspace', () => {
 
     expect(pane).toContain('pane opened.')
     expect(pane).toContain('✗ no project selected')
-    expect(pane).toContain('Next: ask Claude to select a project (mcp__rook__project)')
+    expect(pane).toContain('Next: type `/rook project` to see your projects')
 
     for (const sub of ['scenarios', 'report', 'status']) {
-      expect((await $.command.run(command(sub))).text, sub).toContain('Next: ask Claude to select a project (mcp__rook__project)')
+      expect((await $.command.run(command(sub))).text, sub).toContain('Next: type `/rook project` to see your projects')
     }
 
     // status is answered from the checklist: rook status would only refuse
@@ -74,7 +74,7 @@ describe('readiness · no workspace', () => {
     const { world } = await start($, on, {})
 
     expect((await $.command.run(command('generate'))).text).toBe(
-      "can't generate scenarios yet: no project selected. Next: ask Claude to select a project (mcp__rook__project), or run `! rook project use <id>`.",
+      "can't generate scenarios yet: no project selected. Next: type `/rook project` to see your projects and `/rook project use <id>` to pick one, or ask Claude to set rook up.",
     )
     expect(asText((await $.tool.call({ tool: 'mcp__rook__generate' } as never)) as Ran)).toContain("can't generate scenarios yet")
     expect(world.invocations).toEqual([])
@@ -149,7 +149,7 @@ describe('readiness · background failures stay visible', () => {
     await clock.advance(10)
 
     expect((await ui.find({ key: 'last-error' }))?.text).toContain('last run failed: no project selected — run `rook project use <id>` (remedy: pick_project)')
-    expect((await ui.find({ key: 'last-error' }))?.text).toContain('Next: ask Claude to select a project')
+    expect((await ui.find({ key: 'last-error' }))?.text).toContain('Next: type `/rook project` to see your projects')
     await clock.advance(6_000)
     expect(await ui.find({ key: 'last-error' })).toBeDefined() // not a vanishing toast
     expect(await ui.find({ key: 'run-all' })).toBeUndefined() // rook said no project: no more Run all

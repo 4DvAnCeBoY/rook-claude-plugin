@@ -700,6 +700,7 @@ describe('depth · rca, agents, curation, balance', () => {
     expect(balanceOf({ credits: null })).toBeUndefined()
     expect(balanceOf(undefined)).toBeUndefined()
     expect(balanceText(120.5)).toBe('120.5 credits left')
+    expect(balanceText(9959944.3595)).toBe('9,959,944 credits left')
     expect(balanceText(null)).toBeUndefined()
     expect(balanceWarning(3, 2, 2)).toBe(
       "Credit balance: 3 credits, less than the ~4 credits re-testing 2 scenarios would take at this run's rate. Tell the person before starting another run.",
