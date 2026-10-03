@@ -563,8 +563,9 @@ export function profileTestText(profile: string | undefined, exitCode: number, s
     ...(said.length > 0 ? said.map(line => `  ${clip(line, 300)}`) : [`  rook exited ${exitCode}`]),
     ...(rookOwned
       ? [
-          `${rookOwned[0]} is a variable rook hands the profile's scripts itself, not one to set: this rook build did not pass it to a profile test. ` +
-            'Ask the person to update rook (`! rook update`), or check the profile with a one-scenario run instead. Do not set it with rook env set or edit the script.',
+          `${rookOwned[0]} is a variable rook hands the profile's scripts itself during a run, not one to set: \`rook profile test\` does not pass it, ` +
+            'so a profile whose scripts keep state between steps cannot be checked this way. Check it with a one-scenario run instead ' +
+            '(the rook run tool with only one scenario id and test: true). Do not set it with rook env set or edit the script.',
         ]
       : ['A missing variable: ask the person to run `! rook env set NAME <value>`. A script that is wrong: `! rook profile fix <id>` repairs it (spends credits).']),
   ].join('\n')

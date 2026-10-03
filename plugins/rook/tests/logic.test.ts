@@ -654,7 +654,8 @@ describe('format · setup', () => {
     const text = profileTestText('demo-slow-tool', 1, '', stderr)
 
     expect(text).toContain('ROOK_STATE_DIR is a variable rook hands the profile')
-    expect(text).toContain('! rook update')
+    expect(text).toContain('one-scenario run instead')
+    expect(text).not.toContain('rook update')
     expect(text).not.toContain('rook env set NAME')
     expect(profileTestText('x', 1, '', 'x: not set on this machine — API_KEY\n')).toContain('! rook env set NAME <value>')
   })
