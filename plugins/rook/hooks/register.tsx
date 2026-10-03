@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { CommandRunInput, EngineInterface, Register } from 'claude-code'
 
 import type { RookCluster, RookRunView, RookScenarioRow, RookSnapshot } from '../types'
 import {
@@ -743,6 +743,82 @@ async function paneRun($: EngineInterface, ctx: Ctx, request: RunRequest): Promi
 
 // ── the module ───────────────────────────────────────────────────────────────
 
+// 6 · /rook
+async function rookCommand($: EngineInterface, ctx: Ctx, e: CommandRunInput): Promise<{ text: string; context?: string[] }> {
+  const [sub = 'pane', ...rest] = e.args.trim().split(/\s+/).filter(Boolean)
+  const tail = e.args.trim().slice(sub.length).trim()
+
+  switch (sub) {
+    case 'pane':
+    case 'open': {
+      const opened = await $.ui.open({ id: PANE, title: 'rook' })
+
+      return { text: opened.isPlaced ? 'rook pane opened.' : `rook pane is waiting: ${opened.reason}` }
+    }
+    case 'status':
+      return { text: await statusReply($, ctx) }
+    case 'scenarios':
+      return { text: await scenariosReply($, ctx) }
+    case 'report':
+      return { text: (await reportText($, ctx, rest[0])).text }
+    case 'explain': {
+      const { text, context } = await reportText($, ctx, rest[0])
+
+      return context === undefined
+        ? { text: `${text}\n\nNothing failed, so there is nothing to explain.` }
+        : { text: "rook: handed the failure clusters, rook's remedies and the evidence to Claude.", context: [context] }
+    }
+    case 'run': {
+      const request = parseRunFlags(tail)
+
+      return { text: 'error' in request ? `rook: ${request.error}` : await startRun($, ctx, request, 'command') }
+    }
+    case 'generate': {
+      const request = parseGenerateFlags(tail)
+
+      if ('error' in request) {
+        return { text: `rook: ${request.error}` }
+      }
+
+      $.clock.after(0, async () => $.ui.toast(clip(await generateRun($, ctx, request).catch(error => `rook generate failed: ${String(error)}`), 300)))
+
+      return { text: 'rook: generating scenarios in the background. A toast says when they are written; /rook scenarios lists them.' }
+    }
+    case 'ui':
+    case 'viewer': {
+      const url = await startViewer($, ctx)
+
+      return { text: url.startsWith('http') ? `rook viewer: ${url} (read only: scenarios, runs, request/response and evidence files)` : url }
+    }
+    case 'confirm-prod': {
+      if (e.origin.kind !== 'composer') {
+        return { text: 'rook: confirm-prod must be typed by the person at the prompt.' }
+      }
+
+      // The profile a refusal named, or the active one.
+      const target = await profileOf($, ctx, rest[0])
+
+      if (target === undefined) {
+        return {
+          text: rest[0] === undefined ? 'rook: no rook workspace with an active profile here; nothing to confirm.' : `rook: "${clip(rest[0], 64)}" is not a profile id.`,
+        }
+      }
+
+      const until = (await $.clock.now()) + CONFIRM_MS
+
+      await update($, confirmedAtom, () => ({ cwd: ctx.cwd, profile: target.profileId, until }))
+
+      return {
+        text:
+          `rook: runs with profile "${target.profileId}" in this directory are allowed for the next 15 minutes, ` +
+          "even though its target looks like production. Its writes are real and rook cannot roll them back.",
+      }
+    }
+    default:
+      return { text: USAGE }
+  }
+}
+
 const APPROVALS_NOTE =
   "rook's own tool calls during the command (reading the agent's code, running its commands) are approved with --yes, " +
   'unless the person set allowRules, in which case only those are approved and rook declines the rest.'
@@ -956,80 +1032,11 @@ export const register: Register = (on, options) => {
     return ran
   })
 
-  // 6 · /rook
+  // 6 · /rook — Claude Code labels a command's output with the plugin's name already.
   on('command.run', { command: 'rook' }, async ($, e) => {
-    const [sub = 'pane', ...rest] = e.args.trim().split(/\s+/).filter(Boolean)
-    const tail = e.args.trim().slice(sub.length).trim()
+    const answer = await rookCommand($, ctx, e)
 
-    switch (sub) {
-      case 'pane':
-      case 'open': {
-        const opened = await $.ui.open({ id: PANE, title: 'rook' })
-
-        return { text: opened.isPlaced ? 'rook pane opened.' : `rook pane is waiting: ${opened.reason}` }
-      }
-      case 'status':
-        return { text: await statusReply($, ctx) }
-      case 'scenarios':
-        return { text: await scenariosReply($, ctx) }
-      case 'report':
-        return { text: (await reportText($, ctx, rest[0])).text }
-      case 'explain': {
-        const { text, context } = await reportText($, ctx, rest[0])
-
-        return context === undefined
-          ? { text: `${text}\n\nNothing failed, so there is nothing to explain.` }
-          : { text: "rook: handed the failure clusters, rook's remedies and the evidence to Claude.", context: [context] }
-      }
-      case 'run': {
-        const request = parseRunFlags(tail)
-
-        return { text: 'error' in request ? `rook: ${request.error}` : await startRun($, ctx, request, 'command') }
-      }
-      case 'generate': {
-        const request = parseGenerateFlags(tail)
-
-        if ('error' in request) {
-          return { text: `rook: ${request.error}` }
-        }
-
-        $.clock.after(0, async () => $.ui.toast(clip(await generateRun($, ctx, request).catch(error => `rook generate failed: ${String(error)}`), 300)))
-
-        return { text: 'rook: generating scenarios in the background. A toast says when they are written; /rook scenarios lists them.' }
-      }
-      case 'ui':
-      case 'viewer': {
-        const url = await startViewer($, ctx)
-
-        return { text: url.startsWith('http') ? `rook viewer: ${url} (read only: scenarios, runs, request/response and evidence files)` : url }
-      }
-      case 'confirm-prod': {
-        if (e.origin.kind !== 'composer') {
-          return { text: 'rook: confirm-prod must be typed by the person at the prompt.' }
-        }
-
-        // The profile a refusal named, or the active one.
-        const target = await profileOf($, ctx, rest[0])
-
-        if (target === undefined) {
-          return {
-            text: rest[0] === undefined ? 'rook: no rook workspace with an active profile here; nothing to confirm.' : `rook: "${clip(rest[0], 64)}" is not a profile id.`,
-          }
-        }
-
-        const until = (await $.clock.now()) + CONFIRM_MS
-
-        await update($, confirmedAtom, () => ({ cwd: ctx.cwd, profile: target.profileId, until }))
-
-        return {
-          text:
-            `rook: runs with profile "${target.profileId}" in this directory are allowed for the next 15 minutes, ` +
-            "even though its target looks like production. Its writes are real and rook cannot roll them back.",
-        }
-      }
-      default:
-        return { text: USAGE }
-    }
+    return { ...answer, text: answer.text.replace(/^rook:\s*/, '') }
   })
 
   // 2 · the turn's spinner: where Claude's rook run is, at any terminal width
@@ -1074,6 +1081,9 @@ export const register: Register = (on, options) => {
     const clusters = run?.finished ? orderedClusters(run).filter(cluster => cluster.kind !== 'unverifiable' || isExplained(cluster)) : []
     const clustered = new Set(clusters.flatMap(cluster => cluster.scenarios.map(s => s.id)))
     const loose = failed.filter(row => !clustered.has(row.id))
+    // Scenarios whose newest verdict is a Fail from an earlier run: the latest run did not cover them.
+    const earlier = snapshot.current.filter(row => row.status === 'Fail' && row.runId !== run?.runId)
+    const failing = [...new Set([...failed.map(row => row.id), ...earlier.map(row => row.id)])]
     const health = countsOf(snapshot.current)
     const moved = changesIn(snapshot.current, run?.runId)
     const canAct = running === null
@@ -1149,7 +1159,8 @@ export const register: Register = (on, options) => {
         {run === undefined && <Text dimColor>No runs yet. Press Run all, or ask Claude to test the agent.</Text>}
         {run !== undefined && (
           <Text dimColor wrap="truncate-end">
-            latest: {run.name ?? 'run'} · {run.runId}
+            latest: {run.name ? `${run.name} · ` : ''}
+            {run.runId}
           </Text>
         )}
         {run !== undefined && (
@@ -1212,6 +1223,14 @@ export const register: Register = (on, options) => {
           />,
           ...(expanded === row.id ? [rowDetail(row)] : []),
         ])}
+        {earlier.length > 0 && <Text bold>Still failing from earlier runs</Text>}
+        {earlier.slice(0, 12).map(row => (
+          <Box key={`e-${row.id}`}>
+            <Text wrap="truncate-end">
+              <Text color="red">✗ {row.id}</Text> {row.title} <Text dimColor>· {row.runId}</Text>
+            </Text>
+          </Box>
+        ))}
         {gaps.length > 0 && <Text bold>What nobody looked at</Text>}
         {gaps.slice(0, 8).map(row => (
           <Box key={`g-${row.id}`}>
@@ -1230,8 +1249,8 @@ export const register: Register = (on, options) => {
           ))}
         <Box flexDirection="row" gap={1}>
           {canAct && <Button key="run-all" label="Run all" hotkey="r" onPress={() => paneRun($, ctx, {})} />}
-          {canAct && failed.length > 0 && (
-            <Button key="rerun-failed" label="Re-run failed" hotkey="f" onPress={() => paneRun($, ctx, { only: failed.map(row => row.id) })} />
+          {canAct && failing.length > 0 && (
+            <Button key="rerun-failed" label="Re-run failed" hotkey="f" onPress={() => paneRun($, ctx, { only: failing })} />
           )}
           {failed.length > 0 && run !== undefined && (
             <Button key="fix" label="Fix with Claude" variant="primary" hotkey="x" onPress={() => fixWithClaude($, ctx, run)} />

@@ -359,16 +359,16 @@ describe('format', () => {
     const current = await currentVerdicts(io, AGENT_DIR, await runIds(io, AGENT_DIR), new Map())
     const snapshot = { agentId: 'commercecare', latest, current, neverRun: 0, checkedAt: 0 }
 
-    expect(statusLine(snapshot, false)).toBe('rook ✓1 ✗1 ?1 · 2 gaps · ↑1 fixed')
+    expect(statusLine(snapshot, false)).toBe('✓1 ✗1 ?1 · 2 gaps · ↑1 fixed')
     expect(statusLine(null, false)).toBeUndefined()
-    expect(statusLine(null, true)).toBe('rook ▸ starting')
+    expect(statusLine(null, true)).toBe('▸ starting')
   })
 
   test('status line and spinner while running name the scenario in flight', async () => {
     const latest = (await readRun(ioOver(inFlight()), AGENT_DIR, NEW_RUN, new Map()))!
     const running = { startedAt: 1_000, label: 'all', source: 'tool' as const }
 
-    expect(statusLine({ agentId: 'commercecare', latest, current: [], neverRun: 0, checkedAt: 0 }, true)).toBe('rook ▸ 2/3 · SC-007 starting · ✓1 ✗1 ?0')
+    expect(statusLine({ agentId: 'commercecare', latest, current: [], neverRun: 0, checkedAt: 0 }, true)).toBe('▸ 2/3 · SC-007 starting · ✓1 ✗1 ?0')
     expect(spinnerText(latest, running, 73_000)).toBe('rook 2/3 · SC-007 starting · 1m12s · 1 failing')
     expect(spinnerText(undefined, running, 4_000)).toBe('rook: starting all · 3.0s')
   })

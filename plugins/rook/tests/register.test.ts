@@ -44,7 +44,7 @@ describe('session start', () => {
     expect(world.commands).toEqual(['rook'])
     expect(world.tools.sort()).toEqual(['generate', 'report', 'run', 'scenarios', 'status'])
     expect(world.opened).toEqual(['rook'])
-    expect(world.statuses.at(-1)).toBe('rook ✓1 ✗1 ?1 · 2 gaps · ↑1 fixed')
+    expect(world.statuses.at(-1)).toBe('✓1 ✗1 ?1 · 2 gaps · ↑1 fixed')
   })
 
   test('outside a workspace nothing opens and the status line stays empty', async ($, on) => {
@@ -127,7 +127,28 @@ describe('2 · the pane', () => {
 
     expect(await ui.find({ text: /2\/3 running/ })).toBeDefined()
     expect((await ui.find({ key: 'l-SC-007' }))?.text).toContain('starting')
-    expect(world.statuses.at(-1)).toBe('rook ▸ 2/3 · SC-007 starting · ✓1 ✗1 ?0')
+    expect(world.statuses.at(-1)).toBe('▸ 2/3 · SC-007 starting · ✓1 ✗1 ?0')
+  })
+
+  test('a Fail from an earlier run that the latest run did not cover stays visible, and Re-run failed includes it', async ($, on) => {
+    const fresh = '2026-09-29T09-00-00Z'
+    const { world, clock } = await start($, on, workspace({
+      [`${AGENT_DIR}/runs/${fresh}/run.yaml`]: runYaml(fresh, '', ['SC-002']),
+      [`${AGENT_DIR}/runs/${fresh}/scenarios/SC-002/snapshot.yaml`]: 'title: Refuse false order claim for ORD-9999\n',
+      [`${AGENT_DIR}/runs/${fresh}/scenarios/SC-002/verdict.yaml`]: VERDICT_PASS_GAP,
+      [`${AGENT_DIR}/runs/${fresh}/report.yaml`]: reportYaml(fresh, 1, 0, 0, 2),
+    }))
+    const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE.props, requestId: 'rook', viewport: PANE.viewport })
+
+    expect(await ui.find({ text: /latest: 2026-09-29T09-00-00Z/ })).toBeDefined() // an unnamed run: no empty label
+    expect(await ui.find({ text: 'Still failing from earlier runs' })).toBeDefined()
+    expect((await ui.find({ key: 'e-SC-004' }))?.text).toContain(NEW_RUN)
+
+    freshRun(world, { 'SC-004': VERDICT_PASS_GAP.replace('SC-002', 'SC-004') }, [1, 0, 0])
+    await ui.press({ key: 'rerun-failed' })
+    await clock.advance(10)
+
+    expect(world.invocations.at(-1)).toEqual(['rook', 'run', '--yes', '--json', '--only', 'SC-004'])
   })
 
   test('Evidence viewer starts rook ui --local and links to it', async ($, on) => {
@@ -376,7 +397,7 @@ describe('4 · failures of a run started elsewhere', () => {
     world.files.set(`${AGENT_DIR}/runs/${FRESH_RUN}/scenarios/SC-004/verdict.yaml`, VERDICT_FAIL.replaceAll(NEW_RUN, FRESH_RUN))
     await clock.advance(3_000)
 
-    expect(world.statuses.at(-1)).toBe('rook ▸ 1/1 · ✓0 ✗1 ?0')
+    expect(world.statuses.at(-1)).toBe('▸ 1/1 · ✓0 ✗1 ?0')
     expect(world.appended).toEqual([])
 
     world.files.set(`${AGENT_DIR}/runs/${FRESH_RUN}/report.yaml`, reportYaml(FRESH_RUN, 0, 1, 0, 2))
@@ -388,7 +409,7 @@ describe('4 · failures of a run started elsewhere', () => {
     // hooks: their text is held in logic.test.ts, the append in a live session.
     expect(world.toasts).toEqual([`rook: run ${FRESH_RUN} finished — 0 Pass · 1 Fail · 0 Unable to Verify`])
     // a one-scenario run moves one row: the agent is still 1 / 1 / 1, not "down one"
-    expect(world.statuses.at(-1)).toBe('rook ✓1 ✗1 ?1')
+    expect(world.statuses.at(-1)).toBe('✓1 ✗1 ?1')
   })
 
   test('a workspace that appears mid-session brings old runs, not news', async ($, on) => {
@@ -403,7 +424,7 @@ describe('4 · failures of a run started elsewhere', () => {
     await clock.advance(3_000)
 
     expect(world.toasts).toEqual([])
-    expect(world.statuses.at(-1)).toBe('rook ✓1 ✗1 ?1 · 2 gaps · ↑1 fixed')
+    expect(world.statuses.at(-1)).toBe('✓1 ✗1 ?1 · 2 gaps · ↑1 fixed')
 
     world.files.set(`${AGENT_DIR}/runs/${FRESH_RUN}/run.yaml`, runYaml(FRESH_RUN, 'next', ['SC-004']))
     world.files.set(`${AGENT_DIR}/runs/${FRESH_RUN}/scenarios/SC-004/verdict.yaml`, VERDICT_FAIL)
@@ -431,7 +452,7 @@ describe('hot reload', () => {
 
     world.onRun = () => ({ code: 0, stdout: '' })
     await $.command.run(command('run'))
-    expect((await $.command.run(command('run'))).text).toBe('rook: a run is already in progress.')
+    expect((await $.command.run(command('run'))).text).toBe('a run is already in progress.')
 
     // the reload: session.start again, state kept, the child gone
     await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true } as never)
@@ -461,7 +482,7 @@ describe('6 · /rook', () => {
 
     const explained = await $.command.run(command('explain'))
 
-    expect(explained.text).toBe("rook: handed the failure clusters, rook's remedies and the evidence to Claude.")
+    expect(explained.text).toBe("handed the failure clusters, rook's remedies and the evidence to Claude.")
     expect(explained.context?.[0]).toContain('SC-004')
   })
 
@@ -472,7 +493,7 @@ describe('6 · /rook', () => {
 
     freshRun(world, { 'SC-002': VERDICT_PASS_GAP }, [1, 0, 0])
     expect((await $.command.run(command('run --only SC-002 --class functional'))).text).toContain('running SC-002 in the background')
-    expect((await $.command.run(command('run'))).text).toBe('rook: a run is already in progress.')
+    expect((await $.command.run(command('run'))).text).toBe('a run is already in progress.')
     await clock.advance(10)
 
     expect(world.invocations.filter(argv => argv[1] === 'run')).toEqual([['rook', 'run', '--yes', '--json', '--only', 'SC-002', '--class', 'functional']])
@@ -553,7 +574,7 @@ describe('7 · production guard', () => {
     await clock.advance(10)
     await clock.advance(15_000)
 
-    expect((await pending).text).toBe('rook: the viewer printed no address within 15s — running…')
+    expect((await pending).text).toBe('the viewer printed no address within 15s — running…')
   })
 
   test('other shell commands, and a staging target, pass through', async ($, on) => {

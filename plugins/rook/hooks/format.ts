@@ -63,17 +63,18 @@ export function gapText(row: RookScenarioRow, max: number): string {
   return clip([said, said === '' ? reasonText(row.reason) : undefined].filter(Boolean).join(' ') || 'gap', max)
 }
 
+/** The status line's text; Claude Code shows it after the plugin's name. */
 export function statusLine(snapshot: RookSnapshot | null, isRunning: boolean): string | undefined {
   const run = snapshot?.latest
 
   if (run === undefined || snapshot === null) {
-    return isRunning ? 'rook ▸ starting' : undefined
+    return isRunning ? '▸ starting' : undefined
   }
 
   if (!run.finished) {
     const lane = run.lanes[0]
 
-    return `rook ▸ ${run.done}/${run.planned}${lane ? ` · ${lane.id} ${lane.phase}` : ''} · ✓${run.counts.pass} ✗${run.counts.fail} ?${run.counts.unverifiable}`
+    return `▸ ${run.done}/${run.planned}${lane ? ` · ${lane.id} ${lane.phase}` : ''} · ✓${run.counts.pass} ✗${run.counts.fail} ?${run.counts.unverifiable}`
   }
 
   const { pass, fail, unverifiable } = countsOf(snapshot.current)
@@ -81,7 +82,7 @@ export function statusLine(snapshot: RookSnapshot | null, isRunning: boolean): s
   const { fixed, regressed } = changesIn(snapshot.current, run.runId)
   const moved = [fixed.length > 0 ? `↑${fixed.length} fixed` : '', regressed.length > 0 ? `↓${regressed.length} regressed` : ''].filter(Boolean).join(' ')
 
-  return `rook ✓${pass} ✗${fail} ?${unverifiable}${gaps > 0 ? ` · ${plural(gaps, 'gap')}` : ''}${moved ? ` · ${moved}` : ''}`
+  return `✓${pass} ✗${fail} ?${unverifiable}${gaps > 0 ? ` · ${plural(gaps, 'gap')}` : ''}${moved ? ` · ${moved}` : ''}`
 }
 
 /** The turn's spinner while Claude waits on a rook run: where it is, at any terminal width. */
