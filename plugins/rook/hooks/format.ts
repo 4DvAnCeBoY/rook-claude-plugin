@@ -74,7 +74,7 @@ export function statusLine(snapshot: RookSnapshot | null, isRunning: boolean): s
   if (!run.finished) {
     const lane = run.lanes[0]
 
-    return `▸ ${run.done}/${run.planned}${lane ? ` · ${lane.id} ${lane.phase}` : ''} · ✓${run.counts.pass} ✗${run.counts.fail} ?${run.counts.unverifiable}`
+    return `▸ ${run.done}/${run.planned}${lane ? ` · ${lane.id} ${lane.phase}` : isReporting(run) ? ` · ${REPORTING}` : ''} · ✓${run.counts.pass} ✗${run.counts.fail} ?${run.counts.unverifiable}`
   }
 
   const { pass, fail, unverifiable } = countsOf(snapshot.current)
@@ -84,6 +84,11 @@ export function statusLine(snapshot: RookSnapshot | null, isRunning: boolean): s
 
   return `✓${pass} ✗${fail} ?${unverifiable}${gaps > 0 ? ` · ${plural(gaps, 'gap')}` : ''}${moved ? ` · ${moved}` : ''}`
 }
+
+/** Every scenario judged, report.yaml not written yet: rook is summarising the run. */
+export const isReporting = (run: RookRunView): boolean => !run.finished && run.planned > 0 && run.done >= run.planned && run.lanes.length === 0
+
+export const REPORTING = 'writing the report'
 
 /** The turn's spinner while Claude waits on a rook run: where it is, at any terminal width. */
 export function spinnerText(run: RookRunView | undefined, running: RookRunning, now: number): string {
@@ -95,8 +100,9 @@ export function spinnerText(run: RookRunView | undefined, running: RookRunning, 
 
   const lane = run.lanes[0]
   const more = run.lanes.length > 1 ? ` +${run.lanes.length - 1}` : ''
+  const doing = lane ? ` · ${lane.id} ${lane.phase}${more}` : isReporting(run) ? ` · ${REPORTING}` : ''
 
-  return `rook ${run.done}/${run.planned}${lane ? ` · ${lane.id} ${lane.phase}${more}` : ''} · ${elapsed}${run.counts.fail > 0 ? ` · ${run.counts.fail} failing` : ''}`
+  return `rook ${run.done}/${run.planned}${doing} · ${elapsed}${run.counts.fail > 0 ? ` · ${run.counts.fail} failing` : ''}`
 }
 
 export const progressBar = (done: number, planned: number, width: number): string => {
@@ -106,11 +112,13 @@ export const progressBar = (done: number, planned: number, width: number): strin
   return `${'█'.repeat(filled)}${'░'.repeat(cells - filled)}`
 }
 
-/** `pass rate 50% · 12.5 credits · 1m04s`. */
-export function metricsLine(run: RookRunView): string {
+/** `pass rate 50% · 12.5 credits · 1m04s`; `run` names the figure when a total is quoted beside it. */
+export function metricsLine(run: RookRunView, isTotalQuoted = false): string {
+  const cost = credits(run.credits)
+
   return [
     run.passRate === undefined ? undefined : `pass rate ${Math.round(run.passRate * 100)}%`,
-    credits(run.credits),
+    cost !== undefined && isTotalQuoted ? `run ${cost}` : cost,
     run.durationMs === undefined ? undefined : duration(run.durationMs),
   ]
     .filter(Boolean)
@@ -182,7 +190,7 @@ function tailOf(run: RookRunView): string[] {
   ]
 }
 
-export function failureContext(run: RookRunView, agentDir: string, agentId: string): string {
+export function failureContext(run: RookRunView, agentDir: string, agentId: string, isTotalQuoted = false): string {
   const runDir = `${agentDir}/runs/${run.runId}`
   const rows = new Map(run.rows.map(row => [row.id, row]))
   const clusters = orderedClusters(run).filter(cluster => cluster.kind !== 'unverifiable')
@@ -197,7 +205,7 @@ export function failureContext(run: RookRunView, agentDir: string, agentId: stri
   return [
     `rook run ${run.runId}${run.name ? ` (${run.name})` : ''} against agent ${agentId} finished: ` +
       `${run.counts.pass} Pass, ${run.counts.fail} Fail, ${run.counts.unverifiable} Unable to Verify.` +
-      `${metricsLine(run) ? ` ${metricsLine(run)}.` : ''}`,
+      `${metricsLine(run, isTotalQuoted) ? ` ${metricsLine(run, isTotalQuoted)}.` : ''}`,
     ...(run.headline ? [`Headline: ${clip(run.headline, 300)}`] : []),
     ...(clusters.length > 0
       ? [
@@ -219,7 +227,7 @@ export function failureContext(run: RookRunView, agentDir: string, agentId: stri
 
 export function runSummary(run: RookRunView, agentDir: string, agentId: string, totalCredits?: number): string {
   if (run.counts.fail > 0) {
-    return failureContext(run, agentDir, agentId) + (totalCredits === undefined ? '' : `\nSpent: ${credits(totalCredits)}.`)
+    return failureContext(run, agentDir, agentId, totalCredits !== undefined) + spentLine(totalCredits)
   }
 
   const gaps = gapLines(run)
@@ -229,15 +237,19 @@ export function runSummary(run: RookRunView, agentDir: string, agentId: string, 
 
   return [
     `rook run ${run.runId} against agent ${agentId}: ${run.counts.pass} Pass, 0 Fail, ${run.counts.unverifiable} Unable to Verify` +
-      ` (${run.done}/${run.planned} judged).${metricsLine(run) ? ` ${metricsLine(run)}.` : ''}`,
+      ` (${run.done}/${run.planned} judged).${metricsLine(run, totalCredits !== undefined) ? ` ${metricsLine(run, totalCredits !== undefined)}.` : ''}`,
     ...(run.headline ? [`Headline: ${clip(run.headline, 300)}`] : []),
     ...(gaps.length > 0 ? ['Nothing failed. Unable to Verify is not Pass either; here is what nobody looked at:', ...gaps] : []),
     ...(clusters.length > 0 ? ['', ...clusters.slice(0, 6).map(cluster => clusterNote(cluster, rows, runDir))] : []),
     ...tailOf(run),
-    ...(totalCredits === undefined ? [] : [`Spent: ${credits(totalCredits)}.`]),
+    ...(totalCredits === undefined ? [] : [spentLine(totalCredits).trim()]),
     `Evidence: ${runDir}/`,
   ].join('\n')
 }
+
+/** What the whole command cost: the run plus rook's report and anything else it charged. */
+const spentLine = (total: number | undefined): string =>
+  total === undefined ? '' : `\nSpent in total: ${credits(total)} (the run plus rook's report).`
 
 export function staleLine(stale: RookStale): string {
   const [first, ...rest] = stale.files

@@ -425,7 +425,8 @@ describe('format', () => {
     const text = runSummary(clean, AGENT_DIR, 'commercecare', 12.5)
 
     expect(text).toContain('Nothing failed. Unable to Verify is not Pass either; here is what nobody looked at:')
-    expect(text).toContain('Spent: 12.5 credits.')
+    expect(text).toContain("Spent in total: 12.5 credits (the run plus rook's report).")
+    expect(text).toContain('run 12.5 credits')
   })
 
   test('band and re-test prompt name the files, scenarios and the cost', () => {

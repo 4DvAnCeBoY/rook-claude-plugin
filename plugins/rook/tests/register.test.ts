@@ -114,6 +114,7 @@ describe('2 · the pane', () => {
       expect(await ui.find({ text: /fault: agent/ })).toBeDefined()
       expect((await ui.find({ key: 'm-CL-01' }))?.text ?? JSON.stringify(await ui.find({ key: 'm-CL-01' }))).toContain('ledger.isApproved')
 
+      expect(await ui.find({ text: /The agent called issue_refund for \$500/ })).toBeDefined() // the cluster's own evidence
       await ui.press({ key: 'fix-CL-01' })
       expect(world.submitted.at(-1)).toContain('CL-01 [compromised]')
       expect(world.submitted.at(-1)).toContain('remedy (rook')
@@ -149,6 +150,27 @@ describe('2 · the pane', () => {
     await clock.advance(10)
 
     expect(world.invocations.at(-1)).toEqual(['rook', 'run', '--yes', '--json', '--only', 'SC-004'])
+  })
+
+  test('every verdict in, no report yet: the pane says rook is writing the report', async ($, on) => {
+    const files = workspace()
+    delete files[`${AGENT_DIR}/runs/${NEW_RUN}/report.yaml`]
+    const { world } = await start($, on, files)
+    const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE.props, requestId: 'rook', viewport: PANE.viewport })
+
+    expect(await ui.find({ text: /3\/3 writing the report/ })).toBeDefined()
+    expect(world.statuses.at(-1)).toBe('▸ 3/3 · writing the report · ✓1 ✗1 ?1')
+  })
+
+  test('a workspace with scenarios and no runs says how many are waiting', async ($, on) => {
+    const files = workspace()
+    for (const path of Object.keys(files)) {
+      if (path.includes('/runs/')) delete files[path]
+    }
+    await start($, on, files)
+    const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE.props, requestId: 'rook', viewport: PANE.viewport })
+
+    expect(await ui.find({ text: /3 scenarios, none run yet/ })).toBeDefined()
   })
 
   test('Evidence viewer starts rook ui --local and links to it', async ($, on) => {
@@ -194,7 +216,8 @@ describe('1 · tools Claude calls', () => {
     expect(world.invocations.at(-1)).toEqual(['rook', 'run', '--yes', '--json', '--only', 'SC-004', '--test'])
     expect(asText(ran)).toContain(`rook run ${FRESH_RUN} (from claude) against agent commercecare finished: 0 Pass, 1 Fail, 0 Unable to Verify.`)
     expect(asText(ran)).toContain('achieved: The agent called issue_refund for $500')
-    expect(asText(ran)).toContain('Spent: 4.25 credits.')
+    expect(asText(ran)).toContain('run 4 credits')
+    expect(asText(ran)).toContain("Spent in total: 4.25 credits (the run plus rook's report).")
   })
 
   test('run: rca results reach Claude as clusters with the remedy', async ($, on) => {
@@ -397,7 +420,7 @@ describe('4 · failures of a run started elsewhere', () => {
     world.files.set(`${AGENT_DIR}/runs/${FRESH_RUN}/scenarios/SC-004/verdict.yaml`, VERDICT_FAIL.replaceAll(NEW_RUN, FRESH_RUN))
     await clock.advance(3_000)
 
-    expect(world.statuses.at(-1)).toBe('▸ 1/1 · ✓0 ✗1 ?0')
+    expect(world.statuses.at(-1)).toBe('▸ 1/1 · writing the report · ✓0 ✗1 ?0')
     expect(world.appended).toEqual([])
 
     world.files.set(`${AGENT_DIR}/runs/${FRESH_RUN}/report.yaml`, reportYaml(FRESH_RUN, 0, 1, 0, 2))

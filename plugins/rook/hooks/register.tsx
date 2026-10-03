@@ -14,10 +14,12 @@ import {
   gapText,
   generateText,
   isExplained,
+  isReporting,
   metricsLine,
   orderedClusters,
   progressBar,
   reasonText,
+  REPORTING,
   retestPrompt,
   runSummary,
   scenariosText,
@@ -1089,7 +1091,7 @@ export const register: Register = (on, options) => {
     const canAct = running === null
     const toggle = (id: string) => update($, expandedAtom, open => (open === id ? null : id))
 
-    const rowDetail = (row: RookScenarioRow) => (
+    const rowDetail = (row: RookScenarioRow, isFixable = true) => (
       <Box key={`d-${row.id}`} flexDirection="column" paddingLeft={2}>
         {row.failing.slice(0, 6).map(c => (
           <Box key={`d-${row.id}-${c.id}`} flexDirection="column">
@@ -1112,7 +1114,7 @@ export const register: Register = (on, options) => {
           </Box>
         ))}
         {row.failing.length === 0 && <Text wrap="wrap">{clip(row.summary, 400)}</Text>}
-        {fixButton(row.id)}
+        {isFixable && fixButton(row.id)}
       </Box>
     )
 
@@ -1128,11 +1130,16 @@ export const register: Register = (on, options) => {
         {cluster.where.length > 0 && <Text dimColor wrap="truncate-end">where: {cluster.where.join(', ')}</Text>}
         {cluster.remedy !== undefined && <Markdown key={`m-${cluster.id}`} text={excerpt(`**Remedy**\n\n${cluster.remedy}`, 9000)} />}
         {!isExplained(cluster) && <Text dimColor>Not explained yet: re-run with --rca for cause and remedy.</Text>}
-        {cluster.scenarios.slice(0, 8).map(s => (
-          <Text key={`d-${cluster.id}-${s.id}`} wrap="truncate-end">
-            <Text color="red">✗ {s.id}</Text> {s.title}
-          </Text>
-        ))}
+        {cluster.scenarios.slice(0, 8).flatMap(s => {
+          const row = run?.rows.find(r => r.id === s.id)
+
+          return [
+            <Text key={`d-${cluster.id}-${s.id}`} wrap="truncate-end">
+              <Text color="red">✗ {s.id}</Text> {s.title}
+            </Text>,
+            ...(row !== undefined && row.status === 'Fail' ? [rowDetail(row, false)] : []),
+          ]
+        })}
         {fixButton(cluster.id)}
       </Box>
     )
@@ -1156,7 +1163,11 @@ export const register: Register = (on, options) => {
             {snapshot.neverRun > 0 && <Text dimColor>{snapshot.neverRun} never run</Text>}
           </Box>
         )}
-        {run === undefined && <Text dimColor>No runs yet. Press Run all, or ask Claude to test the agent.</Text>}
+        {run === undefined && (
+          <Text dimColor>
+            {snapshot.neverRun > 0 ? `${snapshot.neverRun} scenarios, none run yet. ` : 'No runs yet. '}Press Run all, or ask Claude to test the agent.
+          </Text>
+        )}
         {run !== undefined && (
           <Text dimColor wrap="truncate-end">
             latest: {run.name ? `${run.name} · ` : ''}
@@ -1165,7 +1176,7 @@ export const register: Register = (on, options) => {
         )}
         {run !== undefined && (
           <Text>
-            {progressBar(run.done, run.planned, Math.min(30, width - 16))} {run.done}/{run.planned} {run.finished ? 'done' : 'running'}
+            {progressBar(run.done, run.planned, Math.min(30, width - 16))} {run.done}/{run.planned} {run.finished ? 'done' : isReporting(run) ? REPORTING : 'running'}
           </Text>
         )}
         {run !== undefined && (
