@@ -1,0 +1,56 @@
+{
+  "name": "rook",
+  "version": "0.1.0",
+  "description": "rook by TestMu AI inside Claude Code: Claude runs rook against the agent it is building, a live verdict pane, re-test prompts after agent edits, failures fed back as fix context, a status line score, /rook commands and a production-target guard.",
+  "author": { "name": "TestMu AI (formerly LambdaTest)" },
+  "homepage": "https://github.com/LambdaTest/rook",
+  "repository": "https://github.com/LambdaTest/rook",
+  "license": "Apache-2.0",
+  "keywords": ["rook", "agent-testing", "agent-assurance", "evals", "red-team"],
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "rookPath": {
+      "type": "string",
+      "title": "rook executable",
+      "description": "The rook CLI to run: a name on PATH or an absolute path.",
+      "default": "rook"
+    },
+    "pane": {
+      "type": "string",
+      "title": "Verdict pane",
+      "description": "auto opens the live pane when a session starts in a rook workspace (on terminals wide enough to dock it); command opens it only on /rook; off never opens it.",
+      "default": "auto",
+      "options": ["auto", "command", "off"]
+    },
+    "statusLine": {
+      "type": "boolean",
+      "title": "Status line score",
+      "description": "Show the latest run's Pass / Fail / Unable to Verify counts and the trend against the previous run.",
+      "default": true
+    },
+    "retestBand": {
+      "type": "boolean",
+      "title": "Re-test prompt",
+      "description": "When Claude edits a file the agent under test is built from, show which scenarios touch it and offer to re-run them.",
+      "default": true
+    },
+    "failureContext": {
+      "type": "boolean",
+      "title": "Failures as context",
+      "description": "When a run you started elsewhere finishes with failures, hand Claude the failing criteria, expected versus achieved, and the evidence quotes.",
+      "default": true
+    },
+    "prodGuard": {
+      "type": "boolean",
+      "title": "Production guard",
+      "description": "Refuse rook runs whose target looks like production until you confirm with /rook confirm-prod. The agent's writes are real and rook cannot roll them back.",
+      "default": true
+    },
+    "prodPatterns": {
+      "type": "string",
+      "title": "Production markers",
+      "description": "Comma-separated words that mark a target as production when they appear as a whole word in its endpoint, domain, command or environment values.",
+      "default": "prod,production,live"
+    }
+  }
+}

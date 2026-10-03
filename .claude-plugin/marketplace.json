@@ -1,0 +1,14 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "rook-claude-plugin",
+  "description": "rook (TestMu AI agent assurance) inside Claude Code",
+  "owner": { "name": "4DvAnCeBoY" },
+  "plugins": [
+    {
+      "name": "rook",
+      "description": "Claude runs rook against the agent it is building: live verdict pane, re-test prompts after agent edits, failures fed back as fix context, status line score, /rook commands and a production-target guard.",
+      "category": "testing",
+      "source": "./plugins/rook"
+    }
+  ]
+}
