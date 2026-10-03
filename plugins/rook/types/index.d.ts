@@ -150,6 +150,12 @@ declare module 'claude-code' {
       tick: number
       /** The last background failure, until the next run or generate starts. */
       lastError: RookLastError | null
+      /** The project's agent ids, for the pane's switch. */
+      agents: string[]
+      /** `rook plan` credits available; null until fetched or when rook could not say. */
+      balance: number | null
+      /** The run `rook report --rca` is explaining now. */
+      explaining: string | null
     }
   }
 }

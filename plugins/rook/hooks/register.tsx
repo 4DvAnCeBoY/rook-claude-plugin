@@ -3,9 +3,12 @@ import type { CommandRunInput, EngineInterface, Register } from 'claude-code'
 
 import type { RookCluster, RookReadiness, RookRunView, RookScenarioRow, RookSnapshot, RookStepId } from '../types'
 import {
+  agentsText,
+  balanceText,
+  balanceWarning,
   clip,
   clusterNote,
-  credits,
+  curateText,
   creditsPerScenario,
   duration,
   excerpt,
@@ -22,6 +25,7 @@ import {
   profileTestText,
   progressBar,
   projectsText,
+  rcaLine,
   reasonText,
   REPORTING,
   retestPrompt,
@@ -38,9 +42,28 @@ import { impactOf, indexAgent, relativeTo } from './impact'
 import { authOf, blockedText, blockerOf, checklistText, diskFacts, learned, NEEDS, readinessOf, setupLine, versionOf } from './readiness'
 import type { CliFacts } from './readiness'
 import type { AgentIndex } from './impact'
-import { allowRulesOf, CLI_ENV, exploreArgs, failureOf, generateArgs, jsonOf, parseExploreFlags, parseGenerateFlags, parseRunFlags, profileArgs, projectArgs, runArgs } from './rook'
+import {
+  agentUseArgs,
+  allowRulesOf,
+  balanceOf,
+  CLI_ENV,
+  curateArgs,
+  exploreArgs,
+  failureOf,
+  generateArgs,
+  jsonOf,
+  parseAgentList,
+  parseExploreFlags,
+  parseGenerateFlags,
+  parseRunFlags,
+  profileArgs,
+  projectArgs,
+  rcaOutcome,
+  reportRcaArgs,
+  runArgs,
+} from './rook'
 import type { Approval, CliResult, ExploreRequest, GenerateRequest, ProfileRequest, ProjectRequest, RunRequest } from './rook'
-import { changesIn, countsOf, currentVerdicts, locate, readRun, RUN_ID, runIds } from './workspace'
+import { agentIdsOf, changesIn, countsOf, currentVerdicts, locate, readRun, RUN_ID, runIds } from './workspace'
 import type { Io, Located, RowCache } from './workspace'
 
 /**
@@ -59,10 +82,14 @@ import type { Io, Located, RowCache } from './workspace'
  *  4. Failures of a run started elsewhere handed to Claude as context.
  *  5. A status line score over every scenario's latest verdict, with what the
  *     latest run fixed or regressed.
- *  6. `/rook` — pane, status, report, explain, run, scenarios, generate,
- *     project, explore, profile, ui, confirm-prod.
+ *  6. `/rook` — pane, status, report, explain, run, scenarios, agent,
+ *     generate, project, explore, profile, ui, confirm-prod.
  *  7. A guard that refuses runs against a production-looking target until
  *     the person confirms.
+ *  8. Depth: `report --rca` on a finished run, agent switching, scenario
+ *     curation (`agent`, `curate` tools), and the credit balance.
+ *  9. A setup checklist (installed, signed in, project, agent, scenarios,
+ *     profile) wherever rook would refuse, with the one next step.
  *
  * Everything rook-side goes through the published CLI contract (`--json`
  * documents) and the documented `.testmuai/rook/` layout. The mod holds no
@@ -84,6 +111,9 @@ const expandedAtom = atom({ plugin: 'rook', key: 'expanded' } as const, null)
 const viewerAtom = atom({ plugin: 'rook', key: 'viewerUrl' } as const, null)
 const tickAtom = atom({ plugin: 'rook', key: 'tick' } as const, 0)
 const lastErrorAtom = atom({ plugin: 'rook', key: 'lastError' } as const, null)
+const agentsAtom = atom({ plugin: 'rook', key: 'agents' } as const, [])
+const balanceAtom = atom({ plugin: 'rook', key: 'balance' } as const, null)
+const explainingAtom = atom({ plugin: 'rook', key: 'explaining' } as const, null)
 
 // The plugin's own tools as exact patterns: the engine's tool table is laid
 // when the mod loads, before session.start registers them.
@@ -95,6 +125,8 @@ const GENERATE_TOOL = /^mcp__rook__generate$/
 const PROJECT_TOOL = /^mcp__rook__project$/
 const EXPLORE_TOOL = /^mcp__rook__explore$/
 const PROFILE_TOOL = /^mcp__rook__profile_test$/
+const AGENT_TOOL = /^mcp__rook__agent$/
+const CURATE_TOOL = /^mcp__rook__curate$/
 /** Every tool that writes a file; MultiEdit exists on some builds only. */
 const EDIT_TOOLS = /^(Edit|Write|MultiEdit|NotebookEdit)$/
 
@@ -102,8 +134,12 @@ const USAGE = [
   '/rook                 open the live verdict pane',
   '/rook status          agents, scenarios and sync state',
   '/rook scenarios       every scenario with its latest verdict',
+  '/rook scenarios exclude|include SC-001 [SC-002 …]   leave scenarios out of runs, or bring them back',
+  '/rook agent [list|use <id>]   the project\'s agents; switch the active one',
   '/rook report [run]    the latest (or named) run: clusters, verdicts, gaps, credits',
   "/rook explain [run]   hand the run's failures (and rook's remedies) to Claude as fix context",
+  '/rook report|explain [run] --rca   have rook explain the clusters first, without calling the agent',
+  '          (free if this agent version was explained already, otherwise it costs credits)',
   '/rook run [--only SC-001,SC-002] [--class …] [--category …] [--tag …] [--profile …] [--name …]',
   '          [--concurrency 1-8] [--resume <run>] [--run <run> --phases collect,judge] [--test] [--rca] [-- <instruction>]',
   '/rook generate [--total N] [--class …] [--category …] [--force] [-- <what to cover>]',
@@ -325,6 +361,7 @@ async function poll($: EngineInterface, ctx: Ctx): Promise<void> {
       return
     }
 
+    await syncAgents($, ctx, loc)
     const ids = await runIds(io, loc.agentDir)
     const latestId = ids[0]
     const isSettled =
@@ -517,6 +554,7 @@ async function backgroundRun($: EngineInterface, ctx: Ctx, argv: string[]): Prom
   } finally {
     await update($, runningAtom, () => null)
     await poll($, ctx)
+    await refreshBalance($, ctx)
   }
 }
 
@@ -620,8 +658,9 @@ async function toolRun($: EngineInterface, ctx: Ctx, request: RunRequest, signal
     }
 
     const halted = doc?.halted ? '\nThe run HALTED before finishing: treat it as incomplete, not as a full suite.' : ''
+    const short = balanceWarning(await refreshBalance($, ctx), creditsPerScenario(run), run.counts.fail > 0 ? run.counts.fail : run.done)
 
-    return { result: runSummary(run, loc.agentDir, loc.agentId, doc?.credits) + halted }
+    return { result: runSummary(run, loc.agentDir, loc.agentId, doc?.credits) + halted + (short === undefined ? '' : `\n${short}`) }
   } finally {
     await update($, runningAtom, () => null)
     await poll($, ctx)
@@ -744,6 +783,7 @@ async function generateRun($: EngineInterface, ctx: Ctx, request: GenerateReques
     ctx.agentIndex = undefined // the scenario set changed
     ctx.isDirty = true
     await poll($, ctx)
+    await refreshBalance($, ctx)
   }
 }
 
@@ -941,10 +981,21 @@ async function rookCommand($: EngineInterface, ctx: Ctx, e: CommandRunInput): Pr
     case 'status':
       return { text: await statusReply($, ctx) }
     case 'scenarios':
-      return { text: await scenariosReply($, ctx) }
+      return { text: rest[0] === undefined || rest[0] === 'list' ? await scenariosReply($, ctx) : await curateReply($, ctx, rest[0], rest.slice(1).join(',').split(',').filter(Boolean)) }
+    case 'agent':
+    case 'agents':
+      return { text: rest[0] === 'use' ? await switchAgent($, ctx, rest[1]) : await agentsReply($, ctx) }
     case 'report':
+      if (rest.includes('--rca')) {
+        return { text: await startExplain($, ctx, rest.find(word => word !== '--rca'), false) }
+      }
+
       return { text: (await reportText($, ctx, rest[0])).text }
     case 'explain': {
+      if (rest.includes('--rca')) {
+        return { text: await startExplain($, ctx, rest.find(word => word !== '--rca'), true) }
+      }
+
       const { text, context } = await reportText($, ctx, rest[0])
 
       return context === undefined
@@ -1170,6 +1221,238 @@ async function profileReply($: EngineInterface, ctx: Ctx, request: ProfileReques
   }
 }
 
+
+// ── depth: rca on a finished run, agents, curation, the balance ─────────────
+
+/** `rook plan --json`: credits left. Fetched at session start and after anything that spends, never per poll. */
+async function refreshBalance($: EngineInterface, ctx: Ctx): Promise<number | null> {
+  const plan = await rookJson($, ctx, ['plan', '--json'])
+  const balance = failureOf(plan) === undefined ? (balanceOf(plan.doc) ?? null) : null
+
+  if ((await read($, balanceAtom)) !== balance) {
+    await update($, balanceAtom, () => balance)
+  }
+
+  return balance
+}
+
+/** The project's agent ids for the pane: rook's own directory names, re-listed with each poll's locate. */
+async function syncAgents($: EngineInterface, ctx: Ctx, loc: Located): Promise<void> {
+  const ids = await agentIdsOf(ioOf($, ctx), loc.projectDir)
+
+  if (String(await read($, agentsAtom)) !== String(ids)) {
+    await update($, agentsAtom, () => ids)
+  }
+}
+
+/** The run a --rca would explain (the named one, or the latest), or why there is nothing to spend on. */
+async function explainable($: EngineInterface, ctx: Ctx, runRef: string | undefined): Promise<{ runId: string } | { refusal: string }> {
+  // Explaining reads the run's evidence and rook's controller: it needs a project and an agent, not a profile.
+  const blocked = await setupBlock($, ctx, NEEDS.generate, 'explain a run')
+  const loc = await where($, ctx)
+
+  if (blocked !== undefined || loc === undefined) {
+    return { refusal: `rook: ${blocked ?? "can't explain a run yet: no agent here."}` }
+  }
+
+  if (runRef !== undefined && !RUN_ID.test(runRef)) {
+    return { refusal: `rook: "${clip(runRef, 40)}" is not a run id (2026-09-28T15-54-56Z form).` }
+  }
+
+  const io = ioOf($, ctx)
+  const ids = await runIds(io, loc.agentDir)
+  const runId = runRef ?? ids[0]
+  const run = runId === undefined || !ids.includes(runId) ? undefined : await readRun(io, loc.agentDir, runId, ctx.rows)
+
+  if (runId === undefined || run === undefined) {
+    return { refusal: runRef ? `rook: no run ${runRef} for agent ${loc.agentId}.` : `rook: agent ${loc.agentId} has no runs yet.` }
+  }
+
+  if (!run.finished) {
+    return { refusal: `rook: run ${runId} has not finished; it can be explained once its report is written.` }
+  }
+
+  if (run.counts.fail === 0 && run.clusters.length === 0) {
+    return { refusal: `rook: run ${runId} has no failures or clusters to explain; nothing was spent.` }
+  }
+
+  if (run.clusters.length > 0 && run.clusters.every(isExplained)) {
+    return { refusal: `rook: every cluster of run ${runId} is explained already; nothing was spent. The rook report tool (without rca) reads it.` }
+  }
+
+  return { runId }
+}
+
+/**
+ * `rook report <run> --rca`, streamed like a run (the explainer reads code
+ * and can take minutes), then the run re-read from disk: report.yaml's
+ * clusters with their causes, and remedies/CL-xx.md. The caller has set
+ * `explaining`; this clears it.
+ */
+async function explainRca($: EngineInterface, ctx: Ctx, runId: string, signal?: AbortSignal): Promise<{ text: string; context?: string }> {
+  try {
+    const args = reportRcaArgs(runId, ctx.approval)
+
+    if ('error' in args) {
+      return { text: `rook: ${args.error}` }
+    }
+
+    const result = await rookRun($, ctx, args.argv, signal)
+    const problem = failureOf(result)
+
+    if (problem !== undefined) {
+      return { text: `rook report --rca did not complete: ${problem}` }
+    }
+
+    ctx.isDirty = true // the latest run's clusters changed under a settled snapshot
+    await poll($, ctx)
+    const head = rcaLine(runId, rcaOutcome(result.stdout ?? ''))
+    const report = await reportText($, ctx, runId)
+
+    return { text: `${head}\n${report.text}`, ...(report.context !== undefined && { context: `${head}\n${report.context}` }) }
+  } finally {
+    await update($, explainingAtom, () => null)
+    await refreshBalance($, ctx)
+  }
+}
+
+/** The model's --rca: inline, so the explained clusters come back as the report tool's result. */
+async function toolExplain($: EngineInterface, ctx: Ctx, runRef: string | undefined, signal: AbortSignal): Promise<string> {
+  if ((await read($, explainingAtom)) !== null) {
+    return 'rook: rook is already explaining a run; wait for it, then read it with the rook report tool.'
+  }
+
+  const target = await explainable($, ctx, runRef)
+
+  if ('refusal' in target) {
+    return target.refusal
+  }
+
+  await update($, explainingAtom, () => target.runId)
+  const { text, context } = await explainRca($, ctx, target.runId, signal)
+
+  return context ?? text
+}
+
+/** An --rca the person asked for (pane, /rook): in the background; `isHandedOver` gives Claude the result as context. */
+async function startExplain($: EngineInterface, ctx: Ctx, runRef: string | undefined, isHandedOver: boolean): Promise<string> {
+  if ((await read($, explainingAtom)) !== null) {
+    return 'rook: rook is already explaining a run.'
+  }
+
+  const target = await explainable($, ctx, runRef)
+
+  if ('refusal' in target) {
+    return target.refusal
+  }
+
+  await update($, explainingAtom, () => target.runId)
+  $.clock.after(0, () => backgroundExplain($, ctx, target.runId, isHandedOver))
+
+  return (
+    `rook: explaining run ${target.runId} in the background. The agent is not called again; ` +
+    'it is free if this agent version was explained already, otherwise it costs credits. The pane shows the causes and remedies when it lands.'
+  )
+}
+
+async function backgroundExplain($: EngineInterface, ctx: Ctx, runId: string, isHandedOver: boolean): Promise<void> {
+  const answer = await explainRca($, ctx, runId).catch(error => ({ text: `rook report --rca failed: ${String(error)}`, context: undefined }))
+
+  $.ui.toast(clip(answer.text.split('\n')[0] ?? '', 200))
+
+  if (isHandedOver && answer.context !== undefined) {
+    const text = `<rook-run-result>\n${answer.context}\n</rook-run-result>`
+
+    await $.session.append({ message: { type: 'user', content: [{ type: 'text', text }] } }).catch(() => undefined)
+  }
+}
+
+async function paneExplain($: EngineInterface, ctx: Ctx, runId: string): Promise<void> {
+  $.ui.toast(await startExplain($, ctx, runId, false))
+}
+
+/** `rook agent` (prose: `* id  name`), or the agent directories on disk when rook cannot answer. */
+async function agentList($: EngineInterface, ctx: Ctx): Promise<{ id: string; name: string; isActive: boolean }[]> {
+  const listed = await rookJson($, ctx, ['agent'])
+  const parsed = listed.exitCode === 0 ? parseAgentList(listed.stdout ?? '') : []
+  const loc = parsed.length > 0 ? undefined : (ctx.located ?? (await where($, ctx)))
+
+  return loc === undefined ? parsed : (await agentIdsOf(ioOf($, ctx), loc.projectDir)).map(id => ({ id, name: id, isActive: id === loc.agentId }))
+}
+
+async function agentsReply($: EngineInterface, ctx: Ctx): Promise<string> {
+  return agentsText(await agentList($, ctx))
+}
+
+/** `rook agent use <id>`, then everything the mod knew about the old agent is let go and re-read. */
+async function switchAgent($: EngineInterface, ctx: Ctx, id: string | undefined): Promise<string> {
+  const args = agentUseArgs(id)
+
+  if ('error' in args) {
+    return `rook: ${args.error}`
+  }
+
+  if ((await read($, runningAtom)) !== null || (await read($, explainingAtom)) !== null) {
+    return 'rook: rook is busy with the current agent; switch once it finishes.'
+  }
+
+  const known = await agentList($, ctx)
+  const agent = known.find(a => a.id === id)
+
+  if (known.length > 0 && agent === undefined) {
+    return `rook: no agent ${id} in this project. Agents: ${known.map(a => a.id).join(', ')}.`
+  }
+
+  if (agent?.isActive) {
+    return `rook: ${id} is already the active agent.`
+  }
+
+  const ran = await rookJson($, ctx, args.argv)
+
+  if (ran.exitCode !== 0) {
+    return `rook agent use failed: ${failureOf(ran) ?? 'no output'}`
+  }
+
+  ctx.agentIndex = undefined
+  ctx.located = undefined
+  ctx.isDirty = true
+
+  if ((await read($, staleAtom)) !== null) {
+    await update($, staleAtom, () => null) // the band named the old agent's scenarios
+  }
+
+  await update($, expandedAtom, () => null)
+  await poll($, ctx)
+
+  return `rook: ${id} is now the active agent. Runs, scenarios and reports follow it.`
+}
+
+async function paneSwitch($: EngineInterface, ctx: Ctx, id: string): Promise<void> {
+  $.ui.toast(await switchAgent($, ctx, id))
+}
+
+/** `rook scenarios exclude|include <ids> --json`; the scenario set is re-read after. */
+async function curateReply($: EngineInterface, ctx: Ctx, verb: string, ids: string[]): Promise<string> {
+  const args = curateArgs(verb, ids)
+
+  if ('error' in args) {
+    return `rook: ${args.error}`
+  }
+
+  const ran = await rookJson($, ctx, args.argv)
+  const problem = failureOf(ran)
+
+  if (problem !== undefined) {
+    return `rook scenarios ${verb} failed: ${problem}`
+  }
+
+  ctx.agentIndex = undefined
+  ctx.isDirty = true
+  await poll($, ctx)
+
+  return curateText(ran.doc)
+}
+
 const APPROVALS_NOTE =
   "rook's own tool calls during the command (reading the agent's code, running its commands) are approved with --yes, " +
   'unless the person set allowRules, in which case only those are approved and rook declines the rest.'
@@ -1240,10 +1523,14 @@ export const register: Register = (on, options) => {
       await update($, viewerAtom, () => null)
     }
 
+    if ((await read($, explainingAtom)) !== null) {
+      await update($, explainingAtom, () => null)
+    }
+
     await $.command.register({
       name: 'rook',
-      description: 'rook agent testing: pane, status, scenarios, report, explain, run, generate, project, explore, profile, ui, confirm-prod',
-      argumentHint: '[pane|status|scenarios|report|explain|run|generate|project|explore|profile|ui|confirm-prod|help]',
+      description: 'rook agent testing: pane, status, scenarios, agent, report, explain, run, generate, project, explore, profile, ui, confirm-prod',
+      argumentHint: '[pane|status|scenarios [exclude|include]|agent [use]|report|explain [--rca]|run|generate|project|explore|profile|ui|confirm-prod|help]',
     })
     await $.tool.register({
       name: 'run',
@@ -1260,11 +1547,17 @@ export const register: Register = (on, options) => {
       name: 'report',
       description:
         "Read a finished rook run from disk (no credits, no agent call): failures grouped into clusters with rook's causes and remedies, " +
-        "failing criteria with rook's evidence, verification gaps, rook's next steps, credits. Defaults to the latest run.",
+        "failing criteria with rook's evidence, verification gaps, rook's next steps, credits. Defaults to the latest run. " +
+        'With rca: true, rook first explains the run\'s clusters (cause, whose fault, a proposed diff) from the evidence it already has, ' +
+        'without calling the agent again: free when this agent version was explained already, otherwise it costs credits and takes minutes. ' +
+        APPROVALS_NOTE,
       inputSchema: {
         type: 'object',
         additionalProperties: false,
-        properties: { run_id: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}Z(-\\d+)?$' } },
+        properties: {
+          run_id: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}Z(-\\d+)?$' },
+          rca: { type: 'boolean', description: 'Have rook explain the clusters first (rook report --rca). Costs credits unless already explained at this agent version' },
+        },
       },
     })
     await $.tool.register({
@@ -1277,6 +1570,32 @@ export const register: Register = (on, options) => {
       description:
         "Every rook scenario of the agent under test: id, feature, class, category, title, its latest verdict, and whether it is excluded or cannot run. No credits. Use it to choose `only` for the rook run tool.",
       inputSchema: { type: 'object', additionalProperties: false, properties: {} },
+    })
+    await $.tool.register({
+      name: 'agent',
+      description:
+        "The rook project's agents, the active one marked (rook agent). With `use`, make another agent active (rook agent use): " +
+        'runs, scenarios and reports then follow it. No credits.',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: { use: { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$', description: 'The agent id to make active' } },
+      },
+    })
+    await $.tool.register({
+      name: 'curate',
+      description:
+        'Leave rook scenarios out of runs (exclude) or bring them back (include). Excluded scenarios stay on disk; nothing is deleted. ' +
+        'No credits. The rook scenarios tool shows which are excluded.',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['action', 'ids'],
+        properties: {
+          action: { type: 'string', enum: ['exclude', 'include'] },
+          ids: { type: 'array', items: { type: 'string', pattern: '^SC-\\d{1,6}$' }, minItems: 1, maxItems: 200, description: 'Scenario ids, e.g. ["SC-004"]' },
+        },
+      },
     })
     await $.tool.register({
       name: 'generate',
@@ -1357,6 +1676,7 @@ export const register: Register = (on, options) => {
     $.clock.every(POLL_MS, () => poll($, ctx))
     // Installed and signed in are asked once, off the start path: `rook auth status` is a network call.
     $.clock.after(0, () => probeThenPoll($, ctx))
+    $.clock.after(0, () => refreshBalance($, ctx))
 
     if (ctx.paneMode === 'auto' && ctx.located !== undefined) {
       void $.ui.open({ id: PANE, title: 'rook' })
@@ -1378,8 +1698,13 @@ export const register: Register = (on, options) => {
     return toolRun($, ctx, request, next.signal)
   })
 
-  on('tool.call', { tool: REPORT_TOOL }, async ($, e) => {
-    const runId = (e as unknown as { run_id?: unknown }).run_id
+  on('tool.call', { tool: REPORT_TOOL }, async ($, e, next) => {
+    const { run_id: runId, rca } = e as unknown as { run_id?: unknown; rca?: unknown }
+
+    if (rca === true) {
+      return { result: await toolExplain($, ctx, typeof runId === 'string' ? runId : undefined, next.signal) }
+    }
+
     const { text, context } = await reportText($, ctx, typeof runId === 'string' ? runId : undefined)
 
     return { result: context ?? text }
@@ -1399,11 +1724,24 @@ export const register: Register = (on, options) => {
           `${snapshot!.neverRun > 0 ? ` · ${snapshot!.neverRun} never run` : ''}`
         : undefined,
     ].filter(Boolean)
+    const balance = balanceText(await refreshBalance($, ctx))
 
-    return { result: [await statusReply($, ctx), ...tail].join('\n') }
+    return { result: [await statusReply($, ctx), ...tail, ...(balance === undefined ? [] : [`Credit balance: ${balance}`])].join('\n') }
   })
 
   on('tool.call', { tool: SCENARIOS_TOOL }, async $ => ({ result: await scenariosReply($, ctx) }))
+
+  on('tool.call', { tool: AGENT_TOOL }, async ($, e) => {
+    const use = (e as unknown as { use?: unknown }).use
+
+    return { result: use === undefined ? await agentsReply($, ctx) : await switchAgent($, ctx, typeof use === 'string' ? use : String(use)) }
+  })
+
+  on('tool.call', { tool: CURATE_TOOL }, async ($, e) => {
+    const { action, ids } = e as unknown as { action?: unknown; ids?: unknown }
+
+    return { result: await curateReply($, ctx, String(action), Array.isArray(ids) ? ids.map(String) : []) }
+  })
 
   on('tool.call', { tool: GENERATE_TOOL }, async ($, e, next) => {
     const input = e as unknown as GenerateRequest
@@ -1503,6 +1841,9 @@ export const register: Register = (on, options) => {
     const expanded = await read($, expandedAtom)
     const viewerUrl = await read($, viewerAtom)
     const lastError = await read($, lastErrorAtom)
+    const agents = await read($, agentsAtom)
+    const balance = balanceText(await read($, balanceAtom))
+    const explaining = await read($, explainingAtom)
     await read($, tickAtom)
     const now = await $.clock.now()
     const width = Math.max(20, e.props.bodyColumns)
@@ -1559,7 +1900,7 @@ export const register: Register = (on, options) => {
     const failing = [...new Set([...failed.map(row => row.id), ...earlier.map(row => row.id)])]
     const health = countsOf(snapshot.current)
     const moved = changesIn(snapshot.current, run?.runId)
-    const canAct = running === null && runBlock === undefined
+    const canAct = running === null && runBlock === undefined // switching agents needs only nothing in flight
     const toggle = (id: string) => update($, expandedAtom, open => (open === id ? null : id))
 
     const rowDetail = (row: RookScenarioRow, isFixable = true) => (
@@ -1600,7 +1941,16 @@ export const register: Register = (on, options) => {
         )}
         {cluster.where.length > 0 && <Text dimColor wrap="truncate-end">where: {cluster.where.join(', ')}</Text>}
         {cluster.remedy !== undefined && <Markdown key={`m-${cluster.id}`} text={excerpt(`**Remedy**\n\n${cluster.remedy}`, 9000)} />}
-        {!isExplained(cluster) && <Text dimColor>Not explained yet: re-run with --rca for cause and remedy.</Text>}
+        {!isExplained(cluster) && (
+          <Text dimColor wrap="wrap">
+            Not explained yet. Explain with rca asks rook for the cause and a remedy from this run's evidence, without calling the agent again: free if
+            this agent version was explained already, otherwise it costs credits.
+          </Text>
+        )}
+        {!isExplained(cluster) && run !== undefined && explaining === null && (
+          <Button key="explain-rca" label="Explain with rca" onPress={() => paneExplain($, ctx, run.runId)} />
+        )}
+        {!isExplained(cluster) && explaining !== null && <Text color="cyan">▸ rook is explaining {explaining}</Text>}
         {cluster.scenarios.slice(0, 8).flatMap(s => {
           const row = run?.rows.find(r => r.id === s.id)
 
@@ -1624,7 +1974,26 @@ export const register: Register = (on, options) => {
         <Text bold wrap="truncate-end">
           rook · {snapshot.agentId ?? ''}
           {snapshot.profileId ? <Text dimColor> · profile {snapshot.profileId}</Text> : ''}
+          {balance !== undefined ? <Text dimColor> · {balance}</Text> : ''}
         </Text>
+        {agents.length > 1 && (
+          <Box flexDirection="row" gap={1}>
+            <Text dimColor>agents</Text>
+            {agents.map(id =>
+              id === snapshot.agentId ? (
+                <Text key={`a-${id}`} bold>
+                  ● {id}
+                </Text>
+              ) : running === null && explaining === null ? (
+                <Button key={`agent-${id}`} label={`use ${id}`} onPress={() => paneSwitch($, ctx, id)} />
+              ) : (
+                <Text key={`a-${id}`} dimColor>
+                  {id}
+                </Text>
+              ),
+            )}
+          </Box>
+        )}
         {runBlock !== undefined && (
           <Box key="run-block">
             <Text color="yellow" wrap="wrap">

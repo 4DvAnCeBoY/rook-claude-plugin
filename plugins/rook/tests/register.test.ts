@@ -42,7 +42,7 @@ describe('session start', () => {
     const { world } = await start($, on, workspace())
 
     expect(world.commands).toEqual(['rook'])
-    expect(world.tools.sort()).toEqual(['explore', 'generate', 'profile_test', 'project', 'report', 'run', 'scenarios', 'status'])
+    expect(world.tools.sort()).toEqual(['agent', 'curate', 'explore', 'generate', 'profile_test', 'project', 'report', 'run', 'scenarios', 'status'])
     expect(world.opened).toEqual(['rook'])
     expect(world.statuses.at(-1)).toBe('✓1 ✗1 ?1 · 2 gaps · ↑1 fixed')
   })
@@ -845,6 +845,277 @@ describe('setup from inside Claude Code', () => {
     await clock.advance(10)
     expect(world.invocations.at(-1)).toEqual(['rook', 'profile', 'test', 'commerce-http', '--yes', '--json', '--goal', 'what can you do?'])
     expect((await $.command.run(command('help'))).text).toContain('/rook explore')
+  })
+})
+
+describe('depth · rca on a finished run', () => {
+  const REPORT = `${AGENT_DIR}/runs/${NEW_RUN}/report.yaml`
+  const REMEDY = `${AGENT_DIR}/runs/${NEW_RUN}/remedies/CL-01.md`
+  const RCA_ARGV = ['rook', 'report', NEW_RUN, '--rca', '--yes', '--json']
+
+  /** The newest run clustered but not explained: what a run without --rca leaves. */
+  function unexplained(): Record<string, string> {
+    const files = withRca()
+
+    delete files[REMEDY]
+    files[REPORT] = files[REPORT]!.replace(/    cause: [^\n]*\n    remedy: [^\n]*\n    fault: agent\n/, '')
+
+    return files
+  }
+
+  /** What `rook report --rca` leaves: report.yaml with causes, the remedy file, and prose on stdout. */
+  function explains(world: World, stdout = 'explaining 2 cluster(s) — 3 model calls\n3.20 credits\n') {
+    const rca = withRca()
+
+    world.onRun = () => ({ code: 0, stdout, writes: { [REPORT]: rca[REPORT]!, [REMEDY]: rca[REMEDY]! } })
+  }
+
+  test('report with rca: rook report <run> --rca, then the explained clusters read back from disk', async ($, on) => {
+    const { world } = await start($, on, unexplained())
+    const checks = world.planChecks
+
+    explains(world)
+    const ran = (await $.tool.call({ tool: 'mcp__rook__report', rca: true } as never)) as Ran
+
+    expect(world.invocations).toEqual([RCA_ARGV])
+    expect(asText(ran)).toContain(`rook explained run ${NEW_RUN} for 3.2 credits (the agent was not called again).`)
+    expect(asText(ran)).toContain('CL-01 [compromised]')
+    expect(asText(ran)).toContain('ledger.isApproved')
+    expect(world.planChecks).toBe(checks + 1)
+  })
+
+  test('report with rca: an explanation rook reuses for this agent version says nothing was spent', async ($, on) => {
+    const { world } = await start($, on, unexplained())
+
+    explains(world, 'already explained at this version — nothing re-derived\n9.00 credits\n')
+    const ran = (await $.tool.call({ tool: 'mcp__rook__report', run_id: NEW_RUN, rca: true } as never)) as Ran
+
+    expect(asText(ran)).toContain('already explained at this agent version; nothing re-derived, no credits spent.')
+    expect(asText(ran)).not.toContain('9 credits')
+  })
+
+  test('report with rca: nothing to explain, a bad run id, or rook refusing, spends nothing or says why', async ($, on) => {
+    const fresh = '2026-09-29T09-00-00Z'
+    const { world } = await start($, on, unexplained())
+
+    expect(asText((await $.tool.call({ tool: 'mcp__rook__report', run_id: '--yes', rca: true } as never)) as Ran)).toContain('is not a run id')
+    expect(world.invocations).toEqual([])
+
+    world.onRun = () => ({ code: 1, stdout: '' })
+    expect(asText((await $.tool.call({ tool: 'mcp__rook__report', rca: true } as never)) as Ran)).toBe('rook report --rca did not complete: running…')
+
+    world.files.set(`${AGENT_DIR}/runs/${fresh}/run.yaml`, runYaml(fresh, '', ['SC-002']))
+    world.files.set(`${AGENT_DIR}/runs/${fresh}/scenarios/SC-002/verdict.yaml`, VERDICT_PASS_GAP)
+    world.files.set(`${AGENT_DIR}/runs/${fresh}/report.yaml`, reportYaml(fresh, 1, 0, 0, 2))
+    expect(asText((await $.tool.call({ tool: 'mcp__rook__report', rca: true } as never)) as Ran)).toContain('no failures or clusters to explain')
+    expect(world.invocations).toHaveLength(1)
+  })
+
+  test('report with rca: a run whose every cluster has a remedy is not explained again', async ($, on) => {
+    const files = withRca()
+
+    files[REPORT] = files[REPORT]!.replace(/  - id: CL-02[\s\S]*?kind: unverifiable\n/, '')
+    const { world } = await start($, on, files)
+
+    expect(asText((await $.tool.call({ tool: 'mcp__rook__report', rca: true } as never)) as Ran)).toContain('is explained already; nothing was spent')
+    expect(world.invocations).toEqual([])
+  })
+
+  test('/rook report --rca and /rook explain --rca run in the background; allowRules replaces --yes', { options: { allowRules: 'bash(git *)' } }, async ($, on) => {
+    const { world, clock } = await start($, on, unexplained())
+
+    explains(world)
+    expect((await $.command.run(command('report --rca'))).text).toContain(`explaining run ${NEW_RUN} in the background`)
+    expect((await $.command.run(command(`explain ${NEW_RUN} --rca`))).text).toBe('rook is already explaining a run.')
+    await clock.advance(10)
+
+    expect(world.invocations).toEqual([['rook', 'report', NEW_RUN, '--rca', '--allow', 'bash(git *)', '--json']])
+    expect(world.toasts.at(-1)).toBe(`rook explained run ${NEW_RUN} for 3.2 credits (the agent was not called again).`)
+    // done, so the next may start (CL-02 still has no remedy; rook re-renders it free at the same version)
+    expect((await $.command.run(command('explain --rca'))).text).toContain('in the background')
+  })
+
+  test('the pane: an unexplained cluster offers Explain with rca, and shows the remedy once it lands', async ($, on) => {
+    const { world, clock } = await start($, on, unexplained())
+    const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE.props, requestId: 'rook', viewport: PANE.viewport })
+
+    await ui.press({ key: 'c-CL-01' })
+    expect(await ui.find({ text: /without calling the agent again/ })).toBeDefined()
+    expect(await ui.find({ text: /re-run with --rca/ })).toBeUndefined()
+
+    explains(world)
+    await ui.press({ key: 'explain-rca' })
+    await clock.advance(10)
+
+    expect(world.invocations).toEqual([RCA_ARGV])
+    expect(world.toasts[0]).toContain(`explaining run ${NEW_RUN} in the background`)
+    expect(await ui.find({ key: 'explain-rca' })).toBeUndefined()
+    expect(JSON.stringify(await ui.find({ key: 'm-CL-01' }))).toContain('ledger.isApproved')
+    await ui.unmount()
+  })
+})
+
+describe('depth · agents', () => {
+  const OTHER_DIR = AGENT_DIR.replace(/commercecare$/, 'refund-desk')
+  const ACTIVE = AGENT_DIR.replace(/\/agents\/commercecare$/, '/active')
+  const twoAgents = () =>
+    workspace({
+      [`${OTHER_DIR}/agent.yaml`]: 'id: refund-desk\nname: Refund Desk\n',
+      [`${OTHER_DIR}/scenarios/SC-001.yaml`]: 'id: SC-001\ntitle: Refund a damaged item\nfeature_id: F-001\n',
+    })
+  const LISTED = { code: 0, stdout: '* commercecare  CommerceCare\n  refund-desk  Refund Desk\n' }
+
+  test('agent tool: rook agent, the active one marked', async ($, on) => {
+    const { world } = await start($, on, twoAgents())
+
+    world.replies = { agent: LISTED }
+    const ran = (await $.tool.call({ tool: 'mcp__rook__agent' } as never)) as Ran
+
+    expect(world.invocations).toEqual([['rook', 'agent']])
+    expect(asText(ran)).toContain('* commercecare  CommerceCare  (active)')
+    expect(asText(ran)).toContain('  refund-desk  Refund Desk')
+  })
+
+  test('agent tool: when rook cannot list, the agent directories on disk answer', async ($, on) => {
+    const { world } = await start($, on, twoAgents())
+
+    world.replies = { agent: { code: 1, stdout: '' } }
+    expect(asText((await $.tool.call({ tool: 'mcp__rook__agent' } as never)) as Ran)).toContain('refund-desk')
+  })
+
+  test('agent tool: use switches with rook agent use, and the mod re-reads the new agent', async ($, on) => {
+    const { world } = await start($, on, twoAgents())
+
+    world.replies = { agent: LISTED, 'agent use': { code: 0, stdout: 'using refund-desk\n', writes: { [ACTIVE]: 'refund-desk\n' } } }
+    await $.tool.call({ tool: 'Edit', file_path: '/work/src/tools.mjs', old_string: 'a', new_string: 'b' } as never)
+    const ran = (await $.tool.call({ tool: 'mcp__rook__agent', use: 'refund-desk' } as never)) as Ran
+
+    expect(world.invocations.at(-1)).toEqual(['rook', 'agent', 'use', 'refund-desk'])
+    expect(asText(ran)).toBe('rook: refund-desk is now the active agent. Runs, scenarios and reports follow it.')
+    expect(await $.ui.render(BAND)).not.toMatchObject({ type: 'Box' }) // the old agent's re-test band is gone
+
+    const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE.props, requestId: 'rook', viewport: PANE.viewport })
+
+    expect(await ui.find({ text: /rook · refund-desk/ })).toBeDefined()
+    expect(await ui.find({ text: /1 scenarios, none run yet/ })).toBeDefined()
+  })
+
+  test('agent tool: an id that is not one, or not in the project, never reaches rook agent use', async ($, on) => {
+    const { world } = await start($, on, twoAgents())
+
+    world.replies = { agent: LISTED }
+    expect(asText((await $.tool.call({ tool: 'mcp__rook__agent', use: '--help' } as never)) as Ran)).toContain('must be an agent id')
+    expect(asText((await $.tool.call({ tool: 'mcp__rook__agent', use: 'ghost' } as never)) as Ran)).toBe('rook: no agent ghost in this project. Agents: commercecare, refund-desk.')
+    expect(asText((await $.tool.call({ tool: 'mcp__rook__agent', use: 'commercecare' } as never)) as Ran)).toContain('already the active agent')
+    expect(world.invocations.filter(argv => argv[2] === 'use')).toEqual([])
+  })
+
+  test('the pane offers a switch only when the project has more than one agent', async ($, on) => {
+    const { world } = await start($, on, twoAgents())
+    const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE.props, requestId: 'rook', viewport: PANE.viewport })
+
+    expect(await ui.find({ text: /● commercecare/ })).toBeDefined()
+    world.replies = { agent: LISTED, 'agent use': { code: 0, stdout: 'using refund-desk\n', writes: { [ACTIVE]: 'refund-desk\n' } } }
+    await ui.press({ key: 'agent-refund-desk' })
+
+    expect(world.invocations.at(-1)).toEqual(['rook', 'agent', 'use', 'refund-desk'])
+    expect(world.toasts.at(-1)).toContain('refund-desk is now the active agent')
+    expect(await ui.find({ key: 'agent-commercecare' })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('a project with one agent shows no switch', async ($, on) => {
+    await start($, on, workspace())
+    const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE.props, requestId: 'rook', viewport: PANE.viewport })
+
+    expect(await ui.find({ text: /● commercecare/ })).toBeUndefined()
+  })
+
+  test('/rook agent lists, /rook agent use switches', async ($, on) => {
+    const { world } = await start($, on, twoAgents())
+
+    world.replies = { agent: LISTED, 'agent use': { code: 0, stdout: 'using refund-desk\n', writes: { [ACTIVE]: 'refund-desk\n' } } }
+    expect((await $.command.run(command('agent'))).text).toContain('refund-desk  Refund Desk')
+    expect((await $.command.run(command('agent use refund-desk'))).text).toBe('refund-desk is now the active agent. Runs, scenarios and reports follow it.')
+  })
+})
+
+describe('depth · curating scenarios', () => {
+  test('curate tool: rook scenarios exclude <ids> --json, and what rook did not know', async ($, on) => {
+    const { world } = await start($, on, workspace())
+
+    world.replies = { 'scenarios exclude': { code: 0, stdout: JSON.stringify({ ok: true, verb: 'exclude', changed: ['SC-004'], unknown: ['SC-999'] }) } }
+    const ran = (await $.tool.call({ tool: 'mcp__rook__curate', action: 'exclude', ids: ['SC-004', 'SC-999', 'SC-004'] } as never)) as Ran
+
+    expect(world.invocations).toEqual([['rook', 'scenarios', 'exclude', 'SC-004', 'SC-999', '--json']])
+    expect(asText(ran)).toContain('rook: excluded SC-004.')
+    expect(asText(ran)).toContain('No such scenario here: SC-999.')
+  })
+
+  test('curate tool: ids that are not scenario ids, and delete, never reach the CLI', async ($, on) => {
+    const { world } = await start($, on, workspace())
+
+    expect(asText((await $.tool.call({ tool: 'mcp__rook__curate', action: 'exclude', ids: ['SC-1 --json'] } as never)) as Ran)).toContain('not scenario ids')
+    expect(asText((await $.tool.call({ tool: 'mcp__rook__curate', action: 'delete', ids: ['SC-004'] } as never)) as Ran)).toContain('not offered here')
+    expect(asText((await $.tool.call({ tool: 'mcp__rook__curate', action: 'include', ids: [] } as never)) as Ran)).toContain('between 1 and 200')
+    expect(world.invocations).toEqual([])
+  })
+
+  test('/rook scenarios include and exclude; delete stays a terminal command, even typed at the prompt', async ($, on) => {
+    const { world } = await start($, on, workspace())
+
+    world.replies = { 'scenarios include': { code: 0, stdout: JSON.stringify({ ok: true, verb: 'include', changed: [], unknown: [] }) } }
+    expect((await $.command.run(command('scenarios include SC-004,SC-007'))).text).toBe('nothing changed — already included.')
+    expect(world.invocations.at(-1)).toEqual(['rook', 'scenarios', 'include', 'SC-004', 'SC-007', '--json'])
+
+    expect((await $.command.run(command('scenarios delete SC-004'))).text).toContain('rook scenarios delete <ids>` in a terminal')
+    expect(world.invocations.filter(argv => argv[2] === 'delete')).toEqual([])
+  })
+})
+
+describe('depth · credit balance', () => {
+  test('fetched once at session start and shown in the pane header, not on every poll', async ($, on) => {
+    const { world, clock } = await start($, on, workspace())
+
+    await clock.advance(10)
+    await clock.advance(9_000)
+    const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE.props, requestId: 'rook', viewport: PANE.viewport })
+
+    expect(world.planChecks).toBe(1)
+    expect(await ui.find({ text: /120\.5 credits left/ })).toBeDefined()
+  })
+
+  test('when rook cannot say, the header shows no balance', async ($, on) => {
+    const { world, clock } = await start($, on, workspace())
+
+    world.plan = { code: 0, stdout: JSON.stringify({ username: 'dev', credits: null }) }
+    await clock.advance(10)
+    const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE.props, requestId: 'rook', viewport: PANE.viewport })
+
+    expect(await ui.find({ text: /credits left/ })).toBeUndefined()
+  })
+
+  test('the status tool includes it', async ($, on) => {
+    const { world } = await start($, on, workspace())
+
+    world.status = { code: 0, stdout: JSON.stringify({ project_id: 'P', agents: [{ local_id: 'commercecare', tree: 'clean' }] }) }
+    expect(asText((await $.tool.call({ tool: 'mcp__rook__status' } as never)) as Ran)).toContain('Credit balance: 120.5 credits left')
+  })
+
+  test('re-read after a run, and the run result warns when it will not cover the re-test', async ($, on) => {
+    const { world, clock } = await start($, on, workspace())
+
+    await clock.advance(10)
+    freshRun(world, { 'SC-004': VERDICT_FAIL.replaceAll(NEW_RUN, FRESH_RUN) }, [0, 1, 0])
+    world.plan = { code: 0, stdout: JSON.stringify({ credits: 1.5 }) }
+    const ran = (await $.tool.call({ tool: 'mcp__rook__run', only: ['SC-004'] } as never)) as Ran
+
+    expect(world.planChecks).toBe(2)
+    expect(asText(ran)).toContain("Credit balance: 1.5 credits, less than the ~4 credits re-testing 1 scenario would take at this run's rate.")
+
+    freshRun(world, { 'SC-004': VERDICT_FAIL.replaceAll(NEW_RUN, FRESH_RUN) }, [0, 1, 0])
+    world.plan = { code: 0, stdout: JSON.stringify({ credits: 500 }) }
+    expect(asText((await $.tool.call({ tool: 'mcp__rook__run', only: ['SC-004'] } as never)) as Ran)).not.toContain('Credit balance')
   })
 })
 

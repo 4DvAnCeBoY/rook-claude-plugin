@@ -2,12 +2,17 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import {
   exploreText,
+  agentsText,
+  balanceText,
+  balanceWarning,
+  curateText,
   failureContext,
   generateText,
   profilesText,
   profileTestText,
   progressBar,
   projectsText,
+  rcaLine,
   retestPrompt,
   runSummary,
   scenariosText,
@@ -18,8 +23,26 @@ import {
 } from '../hooks/format'
 import { assess, declaredVariables, isRunCommand, markersOf } from '../hooks/guard'
 import { impactOf, indexAgent, relativeTo } from '../hooks/impact'
-import { allowRulesOf, exploreArgs, failureOf, generateArgs, jsonOf, parseExploreFlags, parseGenerateFlags, parseRunFlags, profileArgs, projectArgs, runArgs } from '../hooks/rook'
-import { changesIn, compareRunIds, currentVerdicts, locate, readRun, remedyFile, runIds } from '../hooks/workspace'
+import {
+  agentUseArgs,
+  allowRulesOf,
+  balanceOf,
+  curateArgs,
+  exploreArgs,
+  failureOf,
+  generateArgs,
+  jsonOf,
+  parseAgentList,
+  parseExploreFlags,
+  parseGenerateFlags,
+  parseRunFlags,
+  profileArgs,
+  projectArgs,
+  rcaOutcome,
+  reportRcaArgs,
+  runArgs,
+} from '../hooks/rook'
+import { agentIdsOf, changesIn, compareRunIds, currentVerdicts, locate, readRun, remedyFile, runIds } from '../hooks/workspace'
 import type { Io } from '../hooks/workspace'
 import { parseYaml } from '../hooks/yaml'
 import { AGENT_DIR, inFlight, NEW_RUN, OLD_RUN, PROFILE_PROD, PROFILE_STAGING, REMEDY_FILE, VERDICT_FAIL, withRca, workspace } from './fixtures/workspace'
@@ -444,7 +467,7 @@ describe('format', () => {
     expect(text.indexOf('remedy (rook')).toBeLessThan(text.indexOf('achieved: The agent called issue_refund'))
     expect(text).toContain('rook suggests next:\n  · Add a ledger read to the profile hooks so refunds are observable.')
     expect(text).toContain("rook's read: The refund guardrail fails under social pressure")
-    expect(text).not.toContain('re-run with rca: true')
+    expect(text).not.toContain('rook report tool with rca: true')
     expect(text).not.toContain('Failing scenarios (criterion')
   })
 
@@ -455,7 +478,7 @@ describe('format', () => {
     files[path] = files[path]!.replace(/    cause: [^\n]*\n    remedy: [^\n]*\n    fault: agent\n/, '')
     const unexplained = failureContext((await readRun(ioOver(files), AGENT_DIR, NEW_RUN, new Map()))!, AGENT_DIR, 'commercecare')
 
-    expect(unexplained).toContain('re-run with rca: true')
+    expect(unexplained).toContain('rook report tool with rca: true')
 
     const scenarioFault = withRca()
     scenarioFault[path] = scenarioFault[path]!.replace('fault: agent', 'fault: scenario')
@@ -617,5 +640,72 @@ describe('format · setup', () => {
         'A missing variable: ask the person to run `! rook env set NAME <value>`. A script that is wrong: `! rook profile fix <id>` repairs it (spends credits).',
       ].join('\n'),
     )
+  })
+})
+
+describe('depth · rca, agents, curation, balance', () => {
+  test('report --rca argv: the run named, approvals as for a run, nothing unchecked', () => {
+    expect(reportRcaArgs(NEW_RUN)).toEqual({ argv: ['report', NEW_RUN, '--rca', '--yes', '--json'] })
+    expect(reportRcaArgs(NEW_RUN, { allowRules: ['bash(git *)'] })).toEqual({ argv: ['report', NEW_RUN, '--rca', '--allow', 'bash(git *)', '--json'] })
+    expect(reportRcaArgs('--yes')).toHaveProperty('error')
+    expect(reportRcaArgs(`${NEW_RUN} --allow x`)).toHaveProperty('error')
+    expect(reportRcaArgs(undefined)).toHaveProperty('error')
+  })
+
+  test('report --rca answers in prose: the credits it ends with, or a reused explanation', () => {
+    expect(rcaOutcome('explaining 2 cluster(s) — 3 model calls\nCL-01 …\n3.20 credits\n')).toEqual({ isReused: false, credits: 3.2 })
+    expect(rcaOutcome('already explained at this version — nothing re-derived\n2.00 credits\n')).toEqual({ isReused: true })
+    expect(rcaOutcome('')).toEqual({ isReused: false })
+    expect(rcaLine(NEW_RUN, { isReused: false, credits: 3.2 })).toBe(`rook explained run ${NEW_RUN} for 3.2 credits (the agent was not called again).`)
+  })
+
+  test('agents: rook agent prose parsed, use validated', () => {
+    expect(parseAgentList('* commercecare  CommerceCare\n  refund-desk  Refund Desk\n\n  rook agent use <id>\n')).toEqual([
+      { id: 'commercecare', name: 'CommerceCare', isActive: true },
+      { id: 'refund-desk', name: 'Refund Desk', isActive: false },
+    ])
+    expect(parseAgentList('no agents yet — run rook explore .\n')).toEqual([])
+    expect(agentUseArgs('refund-desk')).toEqual({ argv: ['agent', 'use', 'refund-desk'] })
+
+    for (const bad of ['-h', '--help', 'a b', '', 'x;rm', 42]) {
+      expect(agentUseArgs(bad), String(bad)).toHaveProperty('error')
+    }
+
+    expect(agentsText([{ id: 'a', name: 'a', isActive: true }])).toBe('rook agents in this project (1):\n  * a  (active)')
+    expect(agentsText([])).toContain('rook explore')
+  })
+
+  test('agent ids are the directories under agents/', async () => {
+    const projectDir = AGENT_DIR.replace(/\/agents\/commercecare$/, '')
+    const files = workspace({ [`${projectDir}/agents/b-agent/agent.yaml`]: 'id: b-agent\n' })
+
+    expect(await agentIdsOf(ioOver(files), projectDir)).toEqual(['b-agent', 'commercecare'])
+  })
+
+  test('curation: exclude and include of scenario ids only; delete is never built', () => {
+    expect(curateArgs('exclude', ['SC-004', 'SC-007', 'SC-004'])).toEqual({ argv: ['scenarios', 'exclude', 'SC-004', 'SC-007', '--json'] })
+    expect(curateArgs('include', ['SC-1'])).toEqual({ argv: ['scenarios', 'include', 'SC-1', '--json'] })
+    expect(curateArgs('delete', ['SC-004'])).toHaveProperty('error')
+    expect(curateArgs('list', ['SC-004'])).toHaveProperty('error')
+    expect((curateArgs('exclude', ['SC-4', '--yes']) as { error: string }).error).toContain('not scenario ids (SC-001 form): --yes')
+    expect(curateArgs('exclude', [])).toHaveProperty('error')
+    expect(curateArgs('exclude', 'SC-004')).toHaveProperty('error')
+    expect(curateText({ ok: true, verb: 'exclude', changed: ['SC-004'], unknown: [] })).toBe(
+      'rook: excluded SC-004.\nExcluded scenarios stay on disk and leave runs until included again.',
+    )
+  })
+
+  test('balance: rook plan --json credits, null is unknown, and the warning only when it falls short', () => {
+    expect(balanceOf({ username: 'u', credits: 9959944.3595 })).toBe(9959944.3595)
+    expect(balanceOf({ credits: null })).toBeUndefined()
+    expect(balanceOf(undefined)).toBeUndefined()
+    expect(balanceText(120.5)).toBe('120.5 credits left')
+    expect(balanceText(null)).toBeUndefined()
+    expect(balanceWarning(3, 2, 2)).toBe(
+      "Credit balance: 3 credits, less than the ~4 credits re-testing 2 scenarios would take at this run's rate. Tell the person before starting another run.",
+    )
+    expect(balanceWarning(4, 2, 2)).toBeUndefined()
+    expect(balanceWarning(null, 2, 2)).toBeUndefined()
+    expect(balanceWarning(1, undefined, 2)).toBeUndefined()
   })
 })
