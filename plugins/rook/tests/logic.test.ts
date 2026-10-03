@@ -195,6 +195,26 @@ describe('workspace', () => {
     expect(changesIn(current, NEW_RUN).regressed).toEqual([])
   })
 
+  test('a scenario judged only before the newest 30 runs is found, not counted as never run', async () => {
+    const files: Record<string, string> = { ...workspace() }
+    // 31 newer runs that each judge only SC-002
+    for (let n = 0; n < 31; n += 1) {
+      const id = `2026-10-01T00-00-${String(n).padStart(2, '0')}Z`
+      files[`${AGENT_DIR}/runs/${id}/run.yaml`] = 'id: x\n'
+      files[`${AGENT_DIR}/runs/${id}/scenarios/SC-002/verdict.yaml`] = VERDICT_FAIL.replace('SC-004', 'SC-002')
+    }
+    const io = ioOver(files)
+    const ids = await runIds(io, AGENT_DIR)
+    const wanted = new Set(['SC-002', 'SC-004', 'SC-007'])
+
+    expect((await currentVerdicts(io, AGENT_DIR, ids, new Map())).map(row => row.id)).toEqual(['SC-002'])
+    expect((await currentVerdicts(io, AGENT_DIR, ids, new Map(), wanted)).map(row => [row.id, row.runId])).toEqual([
+      ['SC-002', '2026-10-01T00-00-30Z'],
+      ['SC-004', NEW_RUN],
+      ['SC-007', NEW_RUN],
+    ])
+  })
+
   test('a narrow re-test moves only its own rows', async () => {
     const fresh = '2026-09-29T09-00-00Z'
     const files = workspace({

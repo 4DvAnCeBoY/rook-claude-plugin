@@ -42,7 +42,7 @@ describe('session start', () => {
     const { world } = await start($, on, workspace())
 
     expect(world.commands).toEqual(['rook'])
-    expect(world.tools.sort()).toEqual(['agent', 'curate', 'explore', 'generate', 'profile_test', 'project', 'report', 'run', 'scenarios', 'status'])
+    expect(world.tools.sort()).toEqual(['agent', 'curate', 'explore', 'generate', 'profile_test', 'project', 'report', 'run', 'runs', 'scenarios', 'status'])
     expect(world.opened).toEqual(['rook'])
     expect(world.statuses.at(-1)).toBe('✓1 ✗1 ?1 · 2 gaps · ↑1 fixed')
   })
@@ -1119,3 +1119,55 @@ describe('depth · credit balance', () => {
   })
 })
 
+
+describe('history and the scenario set', () => {
+  test('runs: every run on disk, newest first, from run.yaml and report.yaml; /rook runs too', async ($, on) => {
+    const { world } = await start($, on, workspace())
+    const ran = asText((await $.tool.call({ tool: 'mcp__rook__runs' } as never)) as Ran)
+
+    expect(ran.split('\n').slice(0, 3)).toEqual([
+      'rook runs of agent commercecare (2), newest first:',
+      `  ${NEW_RUN} · "hardened adversarial matrix" · 3 planned · 1 Pass · 1 Fail · 1 Unable to Verify · 12.5 credits`,
+      '  2026-09-28T15-31-14Z · "baseline" · 2 planned · 0 Pass · 2 Fail · 0 Unable to Verify · 3 credits',
+    ])
+    expect(asText((await $.tool.call({ tool: 'mcp__rook__runs', limit: 1 } as never)) as Ran)).toContain('(newest 1 of 2)')
+    expect((await $.command.run(command('runs'))).text).toContain(NEW_RUN)
+    expect(world.invocations).toEqual([])
+  })
+
+  test('the pane says how many runs there are', async ($, on) => {
+    await start($, on, workspace())
+    const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE.props, requestId: 'rook', viewport: PANE.viewport })
+
+    expect(await ui.find({ text: /2 runs \(\/rook runs\)/ })).toBeDefined()
+  })
+
+  test('scenarios written outside the session (rook generate in a terminal) are picked up on the next poll', async ($, on) => {
+    const { world, clock } = await start($, on, workspace())
+    const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE.props, requestId: 'rook', viewport: PANE.viewport })
+
+    expect(await ui.find({ text: /never run/ })).toBeUndefined()
+    world.files.set(`${AGENT_DIR}/scenarios/SC-021.yaml`, 'id: SC-021\ntitle: Returns flow\nfeature_id: F-001\n')
+    await clock.advance(3_000)
+
+    expect(await ui.find({ text: '1 never run' })).toBeDefined()
+  })
+})
+
+describe('runs in another project folder', () => {
+  test('an empty selected project points at the runs kept under another project folder', async ($, on) => {
+    const files = workspace()
+    // the same agent, selected under a new project id with no runs; the old folder keeps its runs
+    for (const [path, text] of Object.entries(workspace())) {
+      if (path.includes('/agents/commercecare/') && !path.includes('/runs/')) {
+        files[path.replace('shop--01M0EXAMP1EPR0JECT0000000A', '01M0NEWPR0JECT00000000000B')] = text
+      }
+    }
+    files['.testmuai/rook/projects/01M0NEWPR0JECT00000000000B/active'] = 'commercecare\n'
+    files['.testmuai/rook/settings.json'] = JSON.stringify({ version: 1, active_project_id: '01M0NEWPR0JECT00000000000B' })
+    await start($, on, files)
+    const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE.props, requestId: 'rook', viewport: PANE.viewport })
+
+    expect((await ui.find({ key: 'elsewhere' }))?.text).toContain('2 runs in shop--01M0EXAMP1EPR0JECT0000000A on disk: rook reads only the selected project.')
+  })
+})

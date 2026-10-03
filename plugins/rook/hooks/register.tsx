@@ -30,6 +30,7 @@ import {
   REPORTING,
   retestPrompt,
   runSummary,
+  runsText,
   scenariosText,
   spinnerText,
   staleLine,
@@ -63,7 +64,7 @@ import {
   runArgs,
 } from './rook'
 import type { Approval, CliResult, ExploreRequest, GenerateRequest, ProfileRequest, ProjectRequest, RunRequest } from './rook'
-import { agentIdsOf, changesIn, countsOf, currentVerdicts, locate, projectDirName, readRun, ROOT, RUN_ID, runIds } from './workspace'
+import { agentIdsOf, changesIn, countsOf, currentVerdicts, locate, projectDirName, readRun, ROOT, RUN_ID, runIds, runsElsewhere, runSummaries, scenarioSignature } from './workspace'
 import type { Io, Located, RowCache } from './workspace'
 
 /**
@@ -121,6 +122,7 @@ const RUN_TOOL = /^mcp__rook__run$/
 const REPORT_TOOL = /^mcp__rook__report$/
 const STATUS_TOOL = /^mcp__rook__status$/
 const SCENARIOS_TOOL = /^mcp__rook__scenarios$/
+const RUNS_TOOL = /^mcp__rook__runs$/
 const GENERATE_TOOL = /^mcp__rook__generate$/
 const PROJECT_TOOL = /^mcp__rook__project$/
 const EXPLORE_TOOL = /^mcp__rook__explore$/
@@ -134,6 +136,7 @@ const USAGE = [
   '/rook                 open the live verdict pane',
   '/rook status          agents, scenarios and sync state',
   '/rook scenarios       every scenario with its latest verdict',
+  '/rook runs [N]        the agent\'s runs on disk, newest first (default 20)',
   '/rook scenarios exclude|include SC-001 [SC-002 …]   leave scenarios out of runs, or bring them back',
   '/rook agent [list|use <id>]   the project\'s agents; switch the active one',
   '/rook report [run]    the latest (or named) run: clusters, verdicts, gaps, credits',
@@ -169,6 +172,8 @@ type Ctx = {
   isPrimed: boolean
   /** Set when something changed that the settled check cannot see (new scenarios). */
   isDirty: boolean
+  /** The scenario and feature files as last indexed, to notice changes made elsewhere. */
+  indexSignature: string | undefined
   /** The `rook ui --local` child, while it serves. */
   viewer: AbortController | undefined
   rows: RowCache
@@ -362,6 +367,20 @@ async function poll($: EngineInterface, ctx: Ctx): Promise<void> {
     }
 
     await syncAgents($, ctx, loc)
+
+    // Scenarios or features changed outside this session (rook generate in a
+    // terminal, an exclude): re-read the index and redraw.
+    const signature = `${loc.agentDir}#${await scenarioSignature(io, loc.agentDir)}`
+
+    if (ctx.indexSignature !== signature) {
+      if (ctx.indexSignature !== undefined) {
+        ctx.agentIndex = undefined
+        ctx.isDirty = true
+      }
+
+      ctx.indexSignature = signature
+    }
+
     const ids = await runIds(io, loc.agentDir)
     const latestId = ids[0]
     const isSettled =
@@ -378,9 +397,9 @@ async function poll($: EngineInterface, ctx: Ctx): Promise<void> {
     ctx.isDirty = false
 
     const latest = latestId === undefined ? undefined : await readRun(io, loc.agentDir, latestId, ctx.rows)
-    const current = await currentVerdicts(io, loc.agentDir, ids, ctx.rows)
     const index = ctx.agentIndex ?? (await indexAgent(io, loc.agentDir))
     ctx.agentIndex = index
+    const current = await currentVerdicts(io, loc.agentDir, ids, ctx.rows, new Set(index.scenarios.map(scenario => scenario.id)))
     const judged = new Set(current.map(row => row.id))
     const profileId = (await io.read(`${loc.agentDir}/profiles/active`))?.trim()
     const snapshot: RookSnapshot = {
@@ -389,6 +408,9 @@ async function poll($: EngineInterface, ctx: Ctx): Promise<void> {
       ...(latest !== undefined && { latest }),
       current,
       neverRun: index.scenarios.filter(scenario => !judged.has(scenario.id)).length,
+      runCount: ids.length,
+      // Only looked for when this project has no runs: it explains an empty pane.
+      ...(ids.length === 0 && { elsewhere: await runsElsewhere(io, loc.projectDir) }),
       checkedAt: await $.clock.now(),
       readiness,
     }
@@ -724,6 +746,21 @@ async function statusReply($: EngineInterface, ctx: Ctx): Promise<string> {
 }
 
 /** Every scenario with its latest verdict: rook's list, or the files on disk when rook cannot answer. */
+/** The agent's runs, newest first, from run.yaml and report.yaml: no CLI call, no credits. */
+async function runsReply($: EngineInterface, ctx: Ctx, limit: number): Promise<string> {
+  const blocked = await setupBlock($, ctx, ['agent'], 'list runs')
+  const loc = await where($, ctx)
+
+  if (blocked !== undefined || loc === undefined) {
+    return `rook: ${blocked ?? "can't list runs yet: no agent here."}`
+  }
+
+  const io = ioOf($, ctx)
+  const ids = await runIds(io, loc.agentDir)
+
+  return runsText(loc.agentId, await runSummaries(io, loc.agentDir, ids, limit), ids.length)
+}
+
 async function scenariosReply($: EngineInterface, ctx: Ctx): Promise<string> {
   await poll($, ctx)
   const snapshot = await read($, snapshotAtom)
@@ -980,6 +1017,8 @@ async function rookCommand($: EngineInterface, ctx: Ctx, e: CommandRunInput): Pr
     }
     case 'status':
       return { text: await statusReply($, ctx) }
+    case 'runs':
+      return { text: await runsReply($, ctx, rest[0] !== undefined && /^\d{1,3}$/.test(rest[0]) ? Math.min(100, Math.max(1, Number(rest[0]))) : 20) }
     case 'scenarios':
       return { text: rest[0] === undefined || rest[0] === 'list' ? await scenariosReply($, ctx) : await curateReply($, ctx, rest[0], rest.slice(1).join(',').split(',').filter(Boolean)) }
     case 'agent':
@@ -1538,6 +1577,7 @@ export const register: Register = (on, options) => {
     isPolling: false,
     isPrimed: false,
     isDirty: false,
+    indexSignature: undefined,
     viewer: undefined,
     rows: new Map(),
     cli: {},
@@ -1564,8 +1604,8 @@ export const register: Register = (on, options) => {
 
     await $.command.register({
       name: 'rook',
-      description: 'rook agent testing: pane, status, scenarios, agent, report, explain, run, generate, project, explore, profile, ui, confirm-prod',
-      argumentHint: '[pane|status|scenarios [exclude|include]|agent [use]|report|explain [--rca]|run|generate|project|explore|profile|ui|confirm-prod|help]',
+      description: 'rook agent testing: pane, status, runs, scenarios, agent, report, explain, run, generate, project, explore, profile, ui, confirm-prod',
+      argumentHint: '[pane|status|runs|scenarios [exclude|include]|agent [use]|report|explain [--rca]|run|generate|project|explore|profile|ui|confirm-prod|help]',
     })
     await $.tool.register({
       name: 'run',
@@ -1605,6 +1645,16 @@ export const register: Register = (on, options) => {
       description:
         "Every rook scenario of the agent under test: id, feature, class, category, title, its latest verdict, and whether it is excluded or cannot run. No credits. Use it to choose `only` for the rook run tool.",
       inputSchema: { type: 'object', additionalProperties: false, properties: {} },
+    })
+    await $.tool.register({
+      name: 'runs',
+      description:
+        "The agent's runs on disk, newest first: run id, name, size, Pass / Fail / Unable to Verify, credits, and whether it was a local test run. No credits. Use it to find a run id for the rook report tool (and its rca option).",
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: { limit: { type: 'integer', minimum: 1, maximum: 100, description: 'How many of the newest runs (default 20)' } },
+      },
     })
     await $.tool.register({
       name: 'agent',
@@ -1770,6 +1820,12 @@ export const register: Register = (on, options) => {
   })
 
   on('tool.call', { tool: SCENARIOS_TOOL }, async $ => ({ result: await scenariosReply($, ctx) }))
+
+  on('tool.call', { tool: RUNS_TOOL }, async ($, e) => {
+    const limit = (e as unknown as { limit?: unknown }).limit
+
+    return { result: await runsReply($, ctx, typeof limit === 'number' && Number.isInteger(limit) ? Math.min(100, Math.max(1, limit)) : 20) }
+  })
 
   on('tool.call', { tool: AGENT_TOOL }, async ($, e) => {
     const use = (e as unknown as { use?: unknown }).use
@@ -2058,10 +2114,19 @@ export const register: Register = (on, options) => {
             {runBlock === undefined ? ' Press Run all, or ask Claude to test the agent.' : ''}
           </Text>
         )}
+        {run === undefined && (snapshot.elsewhere?.length ?? 0) > 0 && (
+          <Box key="elsewhere">
+            <Text color="yellow" wrap="wrap">
+              {`${snapshot.elsewhere!.map(other => `${other.runs} run${other.runs === 1 ? '' : 's'} in ${other.project}`).join(', ')} on disk: rook reads only the selected project. ` +
+                'To see them, select that project with /rook project use <id>, or run here.'}
+            </Text>
+          </Box>
+        )}
         {run !== undefined && (
           <Text dimColor wrap="truncate-end">
             latest: {run.name ? `${run.name} · ` : ''}
             {run.runId}
+            {(snapshot.runCount ?? 0) > 1 ? ` · ${snapshot.runCount} runs (/rook runs)` : ''}
           </Text>
         )}
         {run !== undefined && (

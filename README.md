@@ -37,8 +37,9 @@ A Claude Code plugin for [rook](https://github.com/LambdaTest/rook), TestMu AI's
 4. **Re-test prompt.** When Claude edits a file your agent is built from, a bar above the prompt names the scenarios that file affects and estimates the cost at the last run's rate. It has a **Re-test** button.
 5. **Failures as context.** When a run you started in another terminal finishes with failures, Claude receives the clusters and the failing evidence automatically.
 6. **Status line score.** For example `rook ✓41 ✗2 ?3 · 2 gaps · ↑1 fixed ↓1 regressed`, or `rook ▸ 12/48 · SC-013 judging` while a run is in progress. Fixed and regressed are counted per scenario against that scenario's previous verdict, never between runs of different scope.
-7. **`/rook` commands.** `pane`, `status`, `scenarios`, `report`, `explain`, `run`, `generate`, `ui`, `confirm-prod` and `help`.
-8. **Production guard.** Blocks rook runs against a target that looks like production, including a profile named in the run, until **you** type `/rook confirm-prod`. Your agent's writes are real, and rook cannot undo them.
+7. **Run history.** `/rook runs` and the `runs` tool list every run on disk; agent health looks as far back as it needs to; scenarios added outside the session show up on the next poll.
+8. **`/rook` commands.** `pane`, `status`, `scenarios`, `report`, `explain`, `run`, `generate`, `ui`, `confirm-prod` and `help`.
+9. **Production guard.** Blocks rook runs against a target that looks like production, including a profile named in the run, until **you** type `/rook confirm-prod`. Your agent's writes are real, and rook cannot undo them.
 
 ## Requirements
 

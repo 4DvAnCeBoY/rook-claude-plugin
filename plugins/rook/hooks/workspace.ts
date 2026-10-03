@@ -394,23 +394,41 @@ export async function readRun(io: Io, agentDir: string, runId: string, cache: Ro
 /** How many runs back the per-scenario view looks. */
 export const HISTORY = 30
 
+/** How far back the view keeps looking for scenarios the newest HISTORY runs did not judge. */
+export const DEEP_HISTORY = 300
+
 /**
  * Each scenario's newest verdict across the agent's runs, and the verdict it
  * had in the run before that. A re-test of two scenarios then moves two rows
  * instead of standing in for the whole agent, and "fixed" or "regressed" is
  * measured per scenario, never between runs of different scope.
  */
-export async function currentVerdicts(io: Io, agentDir: string, ids: readonly string[], cache: RowCache): Promise<RookCurrent[]> {
+export async function currentVerdicts(
+  io: Io,
+  agentDir: string,
+  ids: readonly string[],
+  cache: RowCache,
+  wanted?: ReadonlySet<string>,
+): Promise<RookCurrent[]> {
   const current = new Map<string, RookCurrent>()
 
-  for (const runId of ids.slice(0, HISTORY)) {
+  for (const [at, runId] of ids.slice(0, DEEP_HISTORY).entries()) {
+    // Past the newest HISTORY runs, look only for scenarios still without a
+    // verdict, and stop once there are none: a scenario judged long ago is not
+    // "never run", and a full walk of every run is not paid on each change.
+    const isDeep = at >= HISTORY
+
+    if (isDeep && (wanted === undefined || [...wanted].every(id => current.has(id)))) {
+      break
+    }
+
     const runDir = `${agentDir}/runs/${runId}`
     const scenarioIds = (await dirs(io, `${runDir}/scenarios`)).filter(name => SCENARIO_ID.test(name))
 
     for (const scenarioId of scenarioIds) {
       const seen = current.get(scenarioId)
 
-      if (seen !== undefined && seen.was !== undefined) {
+      if ((seen !== undefined && seen.was !== undefined) || (isDeep && (seen !== undefined || !wanted?.has(scenarioId)))) {
         continue
       }
 
@@ -429,6 +447,90 @@ export async function currentVerdicts(io: Io, agentDir: string, ids: readonly st
   }
 
   return [...current.values()].sort((a, b) => a.id.localeCompare(b.id))
+}
+
+/** One run as the history list shows it: read from run.yaml and report.yaml only, never the verdicts. */
+export type RunSummary = {
+  runId: string
+  name?: string
+  planned: number
+  finished: boolean
+  isTest: boolean
+  counts?: RookCounts
+  credits?: number
+}
+
+export async function runSummaries(io: Io, agentDir: string, ids: readonly string[], limit: number): Promise<RunSummary[]> {
+  const summaries: RunSummary[] = []
+
+  for (const runId of ids.slice(0, limit)) {
+    const runDir = `${agentDir}/runs/${runId}`
+    const runText = await io.read(`${runDir}/run.yaml`)
+
+    if (runText === undefined) {
+      continue
+    }
+
+    const run = parseMap(runText)
+    const reportText = await io.read(`${runDir}/report.yaml`)
+    const report = reportText === undefined ? undefined : parseMap(reportText)
+    const totals = report !== undefined && isMap(report.totals) ? report.totals : undefined
+    const metrics = report !== undefined && isMap(report.metrics) ? report.metrics : undefined
+    const name = str(run.name)
+    const credits = metrics === undefined ? undefined : num(metrics.credits)
+
+    summaries.push({
+      runId,
+      ...(name !== undefined && name !== '' && { name }),
+      planned: (totals === undefined ? undefined : num(totals.planned)) ?? plannedIds(run).length,
+      finished: reportText !== undefined,
+      isTest: run.test_mode === true,
+      ...(totals !== undefined && { counts: { pass: num(totals.passed) ?? 0, fail: num(totals.failed) ?? 0, unverifiable: num(totals.unverifiable) ?? 0 } }),
+      ...(credits !== undefined && { credits }),
+    })
+  }
+
+  return summaries
+}
+
+/**
+ * What the scenario set looks like on disk: names and times of the agent's
+ * scenario and feature files. A change (rook generate in another terminal,
+ * an exclude) re-reads the index the re-test band and "never run" depend on.
+ */
+export async function scenarioSignature(io: Io, agentDir: string): Promise<string> {
+  const parts: string[] = []
+
+  for (const dir of ['scenarios', 'features']) {
+    for (const entry of await io.list(`${agentDir}/${dir}`).catch(() => [])) {
+      parts.push(`${dir}/${entry.name}@${entry.mtimeMs ?? 0}`)
+    }
+  }
+
+  return parts.sort().join('|')
+}
+
+/** Runs under the other project folders here, which neither rook nor the pane reads while another project is selected. */
+export async function runsElsewhere(io: Io, projectDir: string): Promise<{ project: string; runs: number }[]> {
+  const found: { project: string; runs: number }[] = []
+
+  for (const project of await dirs(io, `${ROOT}/projects`)) {
+    if (`${ROOT}/projects/${project}` === projectDir) {
+      continue
+    }
+
+    let runs = 0
+
+    for (const agent of await dirs(io, `${ROOT}/projects/${project}/agents`)) {
+      runs += (await dirs(io, `${ROOT}/projects/${project}/agents/${agent}/runs`)).filter(name => RUN_ID.test(name)).length
+    }
+
+    if (runs > 0) {
+      found.push({ project, runs })
+    }
+  }
+
+  return found
 }
 
 /** Scenarios of the latest run whose verdict changed against their previous one. */

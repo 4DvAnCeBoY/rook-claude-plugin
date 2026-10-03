@@ -1,5 +1,6 @@
 import type { RookCluster, RookCurrent, RookRunning, RookRunView, RookScenarioRow, RookSnapshot, RookStale } from '../types'
 import { changesIn, countsOf } from './workspace'
+import type { RunSummary } from './workspace'
 
 /**
  * Every string the mod shows or hands to the model, kept pure so the tests
@@ -566,6 +567,30 @@ export function profileTestText(profile: string | undefined, exitCode: number, s
             'Ask the person to update rook (`! rook update`), or check the profile with a one-scenario run instead. Do not set it with rook env set or edit the script.',
         ]
       : ['A missing variable: ask the person to run `! rook env set NAME <value>`. A script that is wrong: `! rook profile fix <id>` repairs it (spends credits).']),
+  ].join('\n')
+}
+
+/** The agent's runs on disk, newest first: what Claude needs to name an older run for report, explain or rca. */
+export function runsText(agentId: string, runs: readonly RunSummary[], total: number): string {
+  if (runs.length === 0) {
+    return `rook: agent ${agentId} has no runs yet.`
+  }
+
+  return [
+    `rook runs of agent ${agentId} (${runs.length === total ? total : `newest ${runs.length} of ${total}`}), newest first:`,
+    ...runs.map(run =>
+      [
+        `  ${run.runId}`,
+        run.name ? `"${clip(run.name, 60)}"` : undefined,
+        `${run.planned} planned`,
+        run.finished && run.counts ? `${run.counts.pass} Pass · ${run.counts.fail} Fail · ${run.counts.unverifiable} Unable to Verify` : 'unfinished',
+        credits(run.credits),
+        run.isTest ? 'test (local only)' : undefined,
+      ]
+        .filter(Boolean)
+        .join(' · '),
+    ),
+    'Read one with the rook report tool and its run_id; rca: true explains it without calling the agent again.',
   ].join('\n')
 }
 

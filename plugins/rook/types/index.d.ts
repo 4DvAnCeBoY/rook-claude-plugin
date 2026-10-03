@@ -109,6 +109,10 @@ export type RookSnapshot = {
   current: RookCurrent[]
   /** Scenarios the agent has that no run has judged yet. */
   neverRun: number
+  /** Runs of this agent on disk. */
+  runCount?: number
+  /** Runs kept under project folders other than the selected one: rook reads only the selected project. */
+  elsewhere?: { project: string; runs: number }[]
   checkedAt: number
   readiness?: RookReadiness
 }
