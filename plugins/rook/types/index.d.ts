@@ -84,7 +84,24 @@ export type RookCurrent = {
   was?: RookStatus
 }
 
+export type RookStepId = 'installed' | 'signed_in' | 'project' | 'agent' | 'scenarios' | 'profile'
+
+/** One step of the setup checklist; `hint` is the exact next action when it is not ticked. */
+export type RookReadyStep = { id: RookStepId; label: string; ok: boolean; hint?: string }
+
+export type RookReadiness = {
+  steps: RookReadyStep[]
+  /** The first unticked step's hint: what to do next. */
+  next?: string
+  /** `.testmuai/rook/` exists here: outside one the mod stays silent. */
+  hasWorkspace: boolean
+}
+
+/** A background run or generate that failed: kept in the pane until the next one starts. */
+export type RookLastError = { source: 'run' | 'generate'; text: string; at: number }
+
 export type RookSnapshot = {
+  /** Undefined when no agent can be read from disk: the pane shows the setup checklist. */
   agentId?: string
   profileId?: string
   latest?: RookRunView
@@ -93,6 +110,7 @@ export type RookSnapshot = {
   /** Scenarios the agent has that no run has judged yet. */
   neverRun: number
   checkedAt: number
+  readiness?: RookReadiness
 }
 
 export type RookStale = {
@@ -130,6 +148,8 @@ declare module 'claude-code' {
       viewerUrl: string | null
       /** Bumped while a run is in flight, so elapsed times redraw. */
       tick: number
+      /** The last background failure, until the next run or generate starts. */
+      lastError: RookLastError | null
     }
   }
 }

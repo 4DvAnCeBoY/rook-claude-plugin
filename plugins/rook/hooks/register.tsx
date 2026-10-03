@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { CommandRunInput, EngineInterface, Register } from 'claude-code'
 
-import type { RookCluster, RookRunView, RookScenarioRow, RookSnapshot } from '../types'
+import type { RookCluster, RookReadiness, RookRunView, RookScenarioRow, RookSnapshot, RookStepId } from '../types'
 import {
   clip,
   clusterNote,
@@ -31,6 +31,8 @@ import {
 } from './format'
 import { assess, declaredVariables, isRunCommand } from './guard'
 import { impactOf, indexAgent, relativeTo } from './impact'
+import { authOf, blockedText, blockerOf, checklistText, diskFacts, learned, NEEDS, readinessOf, setupLine, versionOf } from './readiness'
+import type { CliFacts } from './readiness'
 import type { AgentIndex } from './impact'
 import { allowRulesOf, CLI_ENV, failureOf, generateArgs, jsonOf, parseGenerateFlags, parseRunFlags, runArgs } from './rook'
 import type { Approval, CliResult, GenerateRequest, RunRequest } from './rook'
@@ -75,6 +77,7 @@ const bandHiddenAtom = atom({ plugin: 'rook', key: 'isBandHidden' } as const, fa
 const expandedAtom = atom({ plugin: 'rook', key: 'expanded' } as const, null)
 const viewerAtom = atom({ plugin: 'rook', key: 'viewerUrl' } as const, null)
 const tickAtom = atom({ plugin: 'rook', key: 'tick' } as const, 0)
+const lastErrorAtom = atom({ plugin: 'rook', key: 'lastError' } as const, null)
 
 // The plugin's own tools as exact patterns: the engine's tool table is laid
 // when the mod loads, before session.start registers them.
@@ -121,6 +124,8 @@ type Ctx = {
   /** The `rook ui --local` child, while it serves. */
   viewer: AbortController | undefined
   rows: RowCache
+  /** Installed and signed in, as the CLI last said: probed at start and when they block, not every poll. */
+  cli: CliFacts
 }
 
 function textOption(value: unknown, fallback: string): string {
@@ -208,7 +213,80 @@ async function showStatus($: EngineInterface, ctx: Ctx): Promise<void> {
   const snapshot = await read($, snapshotAtom)
   const running = await read($, runningAtom)
 
-  $.ui.status(statusLine(snapshot, running !== null))
+  // A workspace that cannot run yet says which step is missing; outside one, nothing.
+  const line = [statusLine(snapshot, running !== null), setupLine(snapshot?.readiness)].filter(Boolean).join(' · ')
+
+  $.ui.status(line === '' ? undefined : line)
+}
+
+// ── readiness ────────────────────────────────────────────────────────────────
+
+/** Ask the CLI what only it knows: installed, signed in. Two short calls, never on the poll. */
+async function probe($: EngineInterface, ctx: Ctx): Promise<void> {
+  const run = (args: string[]) =>
+    $.process.run([ctx.bin, ...args], { env: CLI_ENV, stdin: '', timeoutMs: 20_000, ...(ctx.cwd !== '' && { cwd: ctx.cwd }) }).catch(() => undefined)
+  const version = await run(['--version'])
+  const installed = version === undefined ? null : versionOf(version.exitCode, version.stdout)
+
+  if (installed === null) {
+    ctx.cli = { ...ctx.cli, version: null }
+
+    return
+  }
+
+  const auth = await run(['auth', 'status'])
+
+  ctx.cli = { ...ctx.cli, version: installed, auth: auth === undefined ? 'unknown' : authOf(auth.exitCode, `${auth.stdout}\n${auth.stderr}`) }
+}
+
+async function readinessNow($: EngineInterface, ctx: Ctx): Promise<RookReadiness | undefined> {
+  await poll($, ctx)
+
+  return (await read($, snapshotAtom))?.readiness
+}
+
+/**
+ * Why an action cannot be taken yet, in the checklist's words, or undefined.
+ * A step the CLI decides is probed again before refusing: the person may have
+ * run `! rook login` since.
+ */
+async function setupBlock($: EngineInterface, ctx: Ctx, need: readonly RookStepId[], doing: string): Promise<string | undefined> {
+  let readiness = await readinessNow($, ctx)
+  const step = blockerOf(readiness, need)
+
+  if (step?.id === 'installed' || step?.id === 'signed_in') {
+    await probe($, ctx)
+    readiness = await readinessNow($, ctx)
+  }
+
+  return blockedText(readiness, need, doing)
+}
+
+/** A failed rook command that names a setup step (a remedy code, a missing binary) updates the checklist. */
+async function learn($: EngineInterface, ctx: Ctx, result: CliResult): Promise<RookReadiness | undefined> {
+  const next = learned(ctx.cli, await diskFacts(ioOf($, ctx)), result)
+
+  if (next === undefined) {
+    return undefined
+  }
+
+  ctx.cli = next
+
+  return readinessNow($, ctx)
+}
+
+/** A failure with the setup step it revealed, when it revealed one. */
+async function explained($: EngineInterface, ctx: Ctx, result: CliResult, problem: string, need: readonly RookStepId[], doing: string): Promise<string> {
+  const blocked = blockedText(await learn($, ctx, result), need, doing)
+
+  return blocked === undefined ? problem : `${problem}\n${blocked}`
+}
+
+/** "Check again" in the pane's checklist. */
+async function recheck($: EngineInterface, ctx: Ctx): Promise<void> {
+  ctx.cli = { ...ctx.cli, projectRefused: undefined }
+  await probe($, ctx)
+  await poll($, ctx)
 }
 
 async function poll($: EngineInterface, ctx: Ctx): Promise<void> {
@@ -220,12 +298,16 @@ async function poll($: EngineInterface, ctx: Ctx): Promise<void> {
 
   try {
     const io = ioOf($, ctx)
+    const readiness = readinessOf(await diskFacts(io), ctx.cli)
     const loc = await where($, ctx)
     const before = await read($, snapshotAtom)
 
     if (loc === undefined) {
-      if (before !== null) {
-        await update($, snapshotAtom, () => null)
+      // No agent to read: the snapshot carries only the checklist.
+      const bare: RookSnapshot = { current: [], neverRun: 0, checkedAt: await $.clock.now(), readiness }
+
+      if (JSON.stringify({ ...before, checkedAt: 0 }) !== JSON.stringify({ ...bare, checkedAt: 0 })) {
+        await update($, snapshotAtom, () => bare)
       }
 
       return
@@ -237,6 +319,10 @@ async function poll($: EngineInterface, ctx: Ctx): Promise<void> {
       !ctx.isDirty && before?.agentId === loc.agentId && before.latest?.runId === latestId && before.latest?.finished === true
 
     if (isSettled) {
+      if (JSON.stringify(before.readiness) !== JSON.stringify(readiness)) {
+        await update($, snapshotAtom, snapshot => (snapshot === null ? null : { ...snapshot, readiness }))
+      }
+
       return
     }
 
@@ -255,6 +341,7 @@ async function poll($: EngineInterface, ctx: Ctx): Promise<void> {
       current,
       neverRun: index.scenarios.filter(scenario => !judged.has(scenario.id)).length,
       checkedAt: await $.clock.now(),
+      readiness,
     }
 
     if (JSON.stringify({ ...before, checkedAt: 0 }) !== JSON.stringify({ ...snapshot, checkedAt: 0 })) {
@@ -396,13 +483,25 @@ async function prodBlock($: EngineInterface, ctx: Ctx, profileRef?: string): Pro
 
 async function backgroundRun($: EngineInterface, ctx: Ctx, argv: string[]): Promise<void> {
   try {
-    const problem = failureOf(await rookRun($, ctx, argv))
+    const result = await rookRun($, ctx, argv)
+    const problem = failureOf(result)
 
     if (problem !== undefined) {
-      $.ui.toast(`rook: ${clip(problem, 160)}`)
+      // A toast vanishes; the pane keeps the failure until the next run starts.
+      const text = await explained($, ctx, result, `run failed: ${problem}`, NEEDS.run, 'run')
+
+      const at = await $.clock.now()
+
+      await update($, lastErrorAtom, () => ({ source: 'run', text, at }))
+      $.ui.toast(`rook: ${clip(text, 200)}`)
     }
   } catch (error) {
-    $.ui.toast(`rook: could not start ${ctx.bin} — ${clip(String(error), 120)}`)
+    const text = `could not start ${ctx.bin} — ${clip(String(error), 120)}`
+
+    const at = await $.clock.now()
+
+    await update($, lastErrorAtom, () => ({ source: 'run', text, at }))
+    $.ui.toast(`rook: ${text}`)
   } finally {
     await update($, runningAtom, () => null)
     await poll($, ctx)
@@ -421,6 +520,12 @@ async function startRun($: EngineInterface, ctx: Ctx, request: RunRequest, sourc
     return `rook: ${args.error}`
   }
 
+  const unready = await setupBlock($, ctx, NEEDS.run, 'run')
+
+  if (unready !== undefined) {
+    return `rook: ${unready}`
+  }
+
   const blocked = await prodBlock($, ctx, request.profile)
 
   if (blocked !== undefined) {
@@ -432,6 +537,7 @@ async function startRun($: EngineInterface, ctx: Ctx, request: RunRequest, sourc
   const startedAt = await $.clock.now()
 
   await update($, runningAtom, () => ({ startedAt, label, source }))
+  await update($, lastErrorAtom, () => null)
   await showStatus($, ctx)
   $.clock.after(0, () => backgroundRun($, ctx, args.argv))
 
@@ -450,6 +556,12 @@ async function toolRun($: EngineInterface, ctx: Ctx, request: RunRequest, signal
     return { deny: `rook: ${args.error}` }
   }
 
+  const unready = await setupBlock($, ctx, NEEDS.run, 'run')
+
+  if (unready !== undefined) {
+    return { deny: `rook ${unready}` }
+  }
+
   const blocked = await prodBlock($, ctx, request.profile)
 
   if (blocked !== undefined) {
@@ -459,6 +571,7 @@ async function toolRun($: EngineInterface, ctx: Ctx, request: RunRequest, signal
   const startedAt = await $.clock.now()
 
   await update($, runningAtom, () => ({ startedAt, label: request.only?.join(', ') ?? 'all', source: 'tool' }))
+  await update($, lastErrorAtom, () => null)
   await showStatus($, ctx)
 
   // Claude asked, not the person: the pane seats only where there is room for
@@ -474,7 +587,7 @@ async function toolRun($: EngineInterface, ctx: Ctx, request: RunRequest, signal
     const runId = doc?.run_id
 
     if (problem !== undefined && runId === undefined) {
-      return { result: `rook run did not complete: ${problem}` }
+      return { result: await explained($, ctx, result, `rook run did not complete: ${problem}`, NEEDS.run, 'run') }
     }
 
     const loc = ctx.located ?? (await where($, ctx))
@@ -507,7 +620,9 @@ async function reportText($: EngineInterface, ctx: Ctx, runRef: string | undefin
   const loc = await where($, ctx)
 
   if (loc === undefined) {
-    return { text: "rook: no rook workspace in this directory. Run `rook explore .` in the agent's repository first." }
+    const readiness = await readinessNow($, ctx)
+
+    return { text: readiness === undefined ? 'no rook agent in this directory.' : checklistText(readiness) }
   }
 
   if (runRef !== undefined && !RUN_ID.test(runRef)) {
@@ -538,33 +653,57 @@ async function reportText($: EngineInterface, ctx: Ctx, runRef: string | undefin
 }
 
 async function statusReply($: EngineInterface, ctx: Ctx): Promise<string> {
-  const status = await rookJson($, ctx, ['status', '--json'])
+  // `rook status` refuses without a project; the checklist is the better answer then.
+  if ((await setupBlock($, ctx, NEEDS.status, 'read status')) !== undefined) {
+    const readiness = await read($, snapshotAtom)
 
-  return status.doc === undefined ? `rook status failed: ${failureOf(status) ?? 'no output'}` : statusText(status.doc)
+    return readiness?.readiness === undefined ? 'status is not available yet.' : checklistText(readiness.readiness)
+  }
+
+  const status = await rookJson($, ctx, ['status', '--json'])
+  const problem = failureOf(status)
+
+  if (status.doc === undefined || problem !== undefined) {
+    const learnt = await learn($, ctx, status)
+
+    return learnt === undefined ? `status failed: ${problem ?? 'no output'}` : checklistText(learnt)
+  }
+
+  return statusText(status.doc)
 }
 
 /** Every scenario with its latest verdict: rook's list, or the files on disk when rook cannot answer. */
 async function scenariosReply($: EngineInterface, ctx: Ctx): Promise<string> {
   await poll($, ctx)
-  const current = (await read($, snapshotAtom))?.current ?? []
-  const listed = await rookJson($, ctx, ['scenarios', 'list', '--json'])
+  const snapshot = await read($, snapshotAtom)
+  const current = snapshot?.current ?? []
+  // Without a project rook only refuses: read the files on disk straight away.
+  const listed = blockerOf(snapshot?.readiness, NEEDS.status) === undefined ? await rookJson($, ctx, ['scenarios', 'list', '--json']) : undefined
 
-  if (listed.doc !== undefined && failureOf(listed) === undefined) {
+  if (listed !== undefined && listed.doc !== undefined && failureOf(listed) === undefined) {
     return scenariosText(listed.doc, current)
   }
 
   const loc = ctx.located ?? (await where($, ctx))
 
   if (loc === undefined) {
-    return "rook: no rook workspace in this directory. Run `rook explore .` in the agent's repository first."
+    const readiness = await readinessNow($, ctx)
+
+    return readiness === undefined ? 'no rook agent in this directory.' : checklistText(readiness)
   }
 
   const index = ctx.agentIndex ?? (await indexAgent(ioOf($, ctx), loc.agentDir))
   ctx.agentIndex = index
+  if (listed !== undefined) {
+    await learn($, ctx, listed)
+  }
+
+  const unready = await setupBlock($, ctx, NEEDS.run, 'run them')
 
   return (
     scenariosText({ agent_id: loc.agentId, total: index.scenarios.length, scenarios: index.scenarios.map(s => ({ scenario_id: s.id, title: s.title, feature_id: s.featureId })) }, current) +
-    `\n(from the files on disk: rook scenarios list failed — ${clip(failureOf(listed) ?? 'no output', 160)})`
+    (listed === undefined ? '\n(from the files on disk)' : `\n(from the files on disk: rook scenarios list failed — ${clip(failureOf(listed) ?? 'no output', 160)})`) +
+    (unready === undefined ? '' : `\n${unready}`)
   )
 }
 
@@ -576,11 +715,19 @@ async function generateRun($: EngineInterface, ctx: Ctx, request: GenerateReques
     return `rook: ${args.error}`
   }
 
+  const unready = await setupBlock($, ctx, NEEDS.generate, 'generate scenarios')
+
+  if (unready !== undefined) {
+    return `rook: ${unready}`
+  }
+
   try {
     const result = await rookRun($, ctx, args.argv, signal)
     const problem = failureOf(result)
 
-    return problem !== undefined && result.doc === undefined ? `rook generate did not complete: ${problem}` : generateText(result.doc) + (problem ? `\n${problem}` : '')
+    return problem !== undefined && (result.doc === undefined || (result.doc as { ok?: unknown }).ok === false)
+      ? await explained($, ctx, result, `rook generate did not complete: ${problem}`, NEEDS.generate, 'generate scenarios')
+      : generateText(result.doc) + (problem ? `\n${problem}` : '')
   } finally {
     ctx.agentIndex = undefined // the scenario set changed
     ctx.isDirty = true
@@ -739,8 +886,28 @@ async function retest($: EngineInterface): Promise<void> {
   }
 }
 
+/** `/rook generate`: in the background, its failure kept in the pane as well as toasted. */
+async function backgroundGenerate($: EngineInterface, ctx: Ctx, request: GenerateRequest): Promise<void> {
+  await update($, lastErrorAtom, () => null)
+  const text = await generateRun($, ctx, request).catch(error => `rook generate failed: ${String(error)}`)
+
+  // What was written always opens "rook generate: N scenario files written"; anything else failed.
+  if (!text.startsWith('rook generate:')) {
+    const at = await $.clock.now()
+
+    await update($, lastErrorAtom, () => ({ source: 'generate', text: text.replace(/^rook(?::\s*|\s+)/, ''), at }))
+  }
+
+  $.ui.toast(clip(text, 300))
+}
+
 async function paneRun($: EngineInterface, ctx: Ctx, request: RunRequest): Promise<void> {
   $.ui.toast(await startRun($, ctx, request, 'pane'))
+}
+
+async function probeThenPoll($: EngineInterface, ctx: Ctx): Promise<void> {
+  await probe($, ctx)
+  await poll($, ctx)
 }
 
 // ── the module ───────────────────────────────────────────────────────────────
@@ -754,8 +921,10 @@ async function rookCommand($: EngineInterface, ctx: Ctx, e: CommandRunInput): Pr
     case 'pane':
     case 'open': {
       const opened = await $.ui.open({ id: PANE, title: 'rook' })
+      const readiness = await readinessNow($, ctx)
+      const setup = readiness?.next === undefined ? '' : `\n${checklistText(readiness)}`
 
-      return { text: opened.isPlaced ? 'rook pane opened.' : `rook pane is waiting: ${opened.reason}` }
+      return { text: (opened.isPlaced ? 'pane opened.' : `pane is waiting: ${opened.reason}`) + setup }
     }
     case 'status':
       return { text: await statusReply($, ctx) }
@@ -782,15 +951,21 @@ async function rookCommand($: EngineInterface, ctx: Ctx, e: CommandRunInput): Pr
         return { text: `rook: ${request.error}` }
       }
 
-      $.clock.after(0, async () => $.ui.toast(clip(await generateRun($, ctx, request).catch(error => `rook generate failed: ${String(error)}`), 300)))
+      const unready = await setupBlock($, ctx, NEEDS.generate, 'generate scenarios')
 
-      return { text: 'rook: generating scenarios in the background. A toast says when they are written; /rook scenarios lists them.' }
+      if (unready !== undefined) {
+        return { text: unready }
+      }
+
+      $.clock.after(0, () => backgroundGenerate($, ctx, request))
+
+      return { text: 'generating scenarios in the background. A toast says when they are written; /rook scenarios lists them.' }
     }
     case 'ui':
     case 'viewer': {
       const url = await startViewer($, ctx)
 
-      return { text: url.startsWith('http') ? `rook viewer: ${url} (read only: scenarios, runs, request/response and evidence files)` : url }
+      return { text: url.startsWith('http') ? `viewer: ${url} (read only: scenarios, runs, request/response and evidence files)` : url }
     }
     case 'confirm-prod': {
       if (e.origin.kind !== 'composer') {
@@ -873,6 +1048,7 @@ export const register: Register = (on, options) => {
     isDirty: false,
     viewer: undefined,
     rows: new Map(),
+    cli: {},
   }
 
   on('session.start', async ($, e, next) => {
@@ -951,6 +1127,8 @@ export const register: Register = (on, options) => {
     await poll($, ctx)
     ctx.isPrimed = true
     $.clock.every(POLL_MS, () => poll($, ctx))
+    // Installed and signed in are asked once, off the start path: `rook auth status` is a network call.
+    $.clock.after(0, () => probeThenPoll($, ctx))
 
     if (ctx.paneMode === 'auto' && ctx.located !== undefined) {
       void $.ui.open({ id: PANE, title: 'rook' })
@@ -1038,7 +1216,8 @@ export const register: Register = (on, options) => {
   on('command.run', { command: 'rook' }, async ($, e) => {
     const answer = await rookCommand($, ctx, e)
 
-    return { ...answer, text: answer.text.replace(/^rook:\s*/, '') }
+    // "rook: …" and "rook status failed" alike would read "rook: rook …".
+    return { ...answer, text: answer.text.replace(/^rook(?::\s*|\s+)/, '') }
   })
 
   // 2 · the turn's spinner: where Claude's rook run is, at any terminal width
@@ -1063,19 +1242,51 @@ export const register: Register = (on, options) => {
     const running = await read($, runningAtom)
     const expanded = await read($, expandedAtom)
     const viewerUrl = await read($, viewerAtom)
+    const lastError = await read($, lastErrorAtom)
     await read($, tickAtom)
     const now = await $.clock.now()
     const width = Math.max(20, e.props.bodyColumns)
+    const readiness = snapshot?.readiness
+    const failedBefore = lastError !== null && (
+      <Box key="last-error">
+        <Text color="red" wrap="wrap">
+          last {lastError.source} failed: {clip(lastError.text.replace(/^run failed: /, ''), 600)}
+        </Text>
+      </Box>
+    )
 
-    if (snapshot === null) {
+    // No agent to show: the setup checklist, the next step highlighted.
+    if (snapshot === null || snapshot.agentId === undefined) {
+      const nextId = readiness?.steps.find(step => !step.ok)?.id
+      const isCliStep = nextId === 'installed' || nextId === 'signed_in'
+
       return (
         <Box flexDirection="column">
-          <Text bold>rook</Text>
-          <Text dimColor>No rook workspace in this directory.</Text>
-          <Text dimColor>Run `rook explore .` in your agent's repository, then `rook generate` and `rook profile add`.</Text>
+          <Text bold>rook · setup</Text>
+          {readiness === undefined && <Text dimColor>Checking this directory…</Text>}
+          {readiness?.steps.map(step => (
+            <Box key={`s-${step.id}`}>
+              <Text color={step.ok ? 'green' : step.id === nextId ? 'yellow' : undefined} dimColor={!step.ok && step.id !== nextId} bold={step.id === nextId}>
+                {step.ok ? '✓' : '✗'} {step.label}
+              </Text>
+            </Box>
+          ))}
+          {readiness?.next !== undefined && (
+            <Box key="next">
+              <Text wrap="wrap">
+                <Text bold>Next: </Text>
+                {readiness.next}
+              </Text>
+            </Box>
+          )}
+          {failedBefore}
+          {isCliStep && <Button key="recheck" label="Check again" onPress={() => recheck($, ctx)} />}
         </Box>
       )
     }
+
+    // Results can be read while rook would refuse to run (no project selected, signed out…): say so, offer no run.
+    const runBlock = blockedText(readiness, NEEDS.run, 'run')
 
     const run = snapshot.latest
     const failed = run?.rows.filter(row => row.status === 'Fail') ?? []
@@ -1088,7 +1299,7 @@ export const register: Register = (on, options) => {
     const failing = [...new Set([...failed.map(row => row.id), ...earlier.map(row => row.id)])]
     const health = countsOf(snapshot.current)
     const moved = changesIn(snapshot.current, run?.runId)
-    const canAct = running === null
+    const canAct = running === null && runBlock === undefined
     const toggle = (id: string) => update($, expandedAtom, open => (open === id ? null : id))
 
     const rowDetail = (row: RookScenarioRow, isFixable = true) => (
@@ -1154,6 +1365,14 @@ export const register: Register = (on, options) => {
           rook · {snapshot.agentId ?? ''}
           {snapshot.profileId ? <Text dimColor> · profile {snapshot.profileId}</Text> : ''}
         </Text>
+        {runBlock !== undefined && (
+          <Box key="run-block">
+            <Text color="yellow" wrap="wrap">
+              ⚠ {runBlock}
+            </Text>
+          </Box>
+        )}
+        {failedBefore}
         {snapshot.current.length > 0 && (
           <Box flexDirection="row" gap={2}>
             <Text dimColor>agent</Text>
@@ -1165,7 +1384,8 @@ export const register: Register = (on, options) => {
         )}
         {run === undefined && (
           <Text dimColor>
-            {snapshot.neverRun > 0 ? `${snapshot.neverRun} scenarios, none run yet. ` : 'No runs yet. '}Press Run all, or ask Claude to test the agent.
+            {snapshot.neverRun > 0 ? `${snapshot.neverRun} scenarios, none run yet.` : 'No runs yet.'}
+            {runBlock === undefined ? ' Press Run all, or ask Claude to test the agent.' : ''}
           </Text>
         )}
         {run !== undefined && (
