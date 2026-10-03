@@ -58,6 +58,17 @@ export function projectIdOf(settings: unknown): string | undefined {
   return undefined
 }
 
+/** The project directory rook reads: the selected id (plain or `slug--id`), or the only one there is. */
+export function projectDirName(projects: readonly string[], projectId: string | undefined): string | undefined {
+  return projects.find(name => projectId !== undefined && isProjectDir(name, projectId)) ?? (projects.length === 1 ? projects[0] : undefined)
+}
+
+export const isProjectDir = (name: string, projectId: string): boolean => name === projectId || name.endsWith(`--${projectId}`)
+
+/** The agent rook acts on: the one `active` names, or the only one (one agent is not a choice; several is). */
+export const activeAgentOf = (agents: readonly string[], active: string | undefined): string | undefined =>
+  active !== undefined && agents.includes(active) ? active : agents.length === 1 ? agents[0] : undefined
+
 /** The active project's agent, or undefined when this directory holds no rook workspace. */
 export async function locate(io: Io): Promise<Located | undefined> {
   const settingsText = await io.read(`${ROOT}/settings.json`)
@@ -75,18 +86,14 @@ export async function locate(io: Io): Promise<Located | undefined> {
   }
 
   const projects = await dirs(io, `${ROOT}/projects`)
-  const project =
-    projects.find(name => projectId !== undefined && (name === projectId || name.endsWith(`--${projectId}`))) ??
-    (projects.length === 1 ? projects[0] : undefined)
+  const project = projectDirName(projects, projectId)
 
   if (project === undefined) {
     return undefined
   }
 
   const projectDir = `${ROOT}/projects/${project}`
-  const agents = await dirs(io, `${projectDir}/agents`)
-  const active = (await io.read(`${projectDir}/active`))?.trim()
-  const agentId = active !== undefined && agents.includes(active) ? active : agents.length === 1 ? agents[0] : undefined
+  const agentId = activeAgentOf(await agentIdsOf(io, projectDir), (await io.read(`${projectDir}/active`))?.trim())
 
   return agentId === undefined ? undefined : { projectDir, agentId, agentDir: `${projectDir}/agents/${agentId}` }
 }

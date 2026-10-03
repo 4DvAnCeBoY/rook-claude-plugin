@@ -43,7 +43,7 @@ export type Approval = { allowRules: readonly string[] }
 
 const CLASSES = ['functional', 'non-functional', 'adversarial'] as const
 const PHASE_NAMES = ['prepare', 'open', 'execute', 'close', 'collect', 'judge'] as const
-const SCENARIO = /^SC-\d{1,6}$/
+const SCENARIO = /^SC-\d{3,6}$/
 const WORD = /^[a-z0-9][a-z0-9_-]{0,63}$/i
 const PROFILE = /^[\w.-]{1,64}$/
 const CONTROL = /[\u0000-\u001f\u007f]/

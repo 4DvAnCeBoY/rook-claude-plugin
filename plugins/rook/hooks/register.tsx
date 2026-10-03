@@ -1040,6 +1040,12 @@ async function rookCommand($: EngineInterface, ctx: Ctx, e: CommandRunInput): Pr
         return { text: `rook: ${request.error}` }
       }
 
+      const unready = await setupBlock($, ctx, NEEDS.explore, 'explore this repository')
+
+      if (unready !== undefined) {
+        return { text: unready }
+      }
+
       $.clock.after(0, async () => $.ui.toast(clip(await exploreRun($, ctx, request).catch(error => `rook explore failed: ${String(error)}`), 300)))
 
       return { text: 'rook: exploring this repository in the background (minutes, spends credits). A toast says what it found; the pane picks the agent up.' }
@@ -1068,7 +1074,8 @@ async function rookCommand($: EngineInterface, ctx: Ctx, e: CommandRunInput): Pr
 
       // Checked before going to the background, so a refusal shows here and not in a toast.
       const args = profileArgs(request, ctx.approval)
-      const blocked = 'error' in args ? `rook: ${args.error}` : await prodBlock($, ctx, request.profile)
+      const unready = 'error' in args ? undefined : await setupBlock($, ctx, NEEDS.profileTest, 'test a profile')
+      const blocked = 'error' in args ? `rook: ${args.error}` : unready !== undefined ? `rook: ${unready}` : await prodBlock($, ctx, request.profile)
 
       if (blocked !== undefined) {
         return { text: blocked }
@@ -1161,6 +1168,12 @@ async function exploreRun($: EngineInterface, ctx: Ctx, request: ExploreRequest,
     return `rook: ${args.error}`
   }
 
+  const unready = await setupBlock($, ctx, NEEDS.explore, 'explore this repository')
+
+  if (unready !== undefined) {
+    return `rook: ${unready}`
+  }
+
   try {
     const result = await rookRun($, ctx, args.argv, signal)
 
@@ -1205,10 +1218,10 @@ async function profileReply($: EngineInterface, ctx: Ctx, request: ProfileReques
     return { result: ran.exitCode === 0 ? `rook: ${clip(ran.stdout?.trim() || 'done', 200)}` : `rook profile use failed: ${failureOf(ran) ?? `rook exited ${ran.exitCode}`}` }
   }
 
-  const blocked = await prodBlock($, ctx, request.profile)
+  const blocked = (await setupBlock($, ctx, NEEDS.profileTest, 'test a profile')) ?? (await prodBlock($, ctx, request.profile))
 
   if (blocked !== undefined) {
-    return { deny: blocked }
+    return { deny: blocked.startsWith('rook') ? blocked : `rook: ${blocked}` }
   }
 
   try {
@@ -1463,7 +1476,7 @@ const RUN_SCHEMA = {
   properties: {
     only: {
       type: 'array',
-      items: { type: 'string', pattern: '^SC-\\d{1,6}$' },
+      items: { type: 'string', pattern: '^SC-\\d{3,6}$' },
       minItems: 1,
       maxItems: 200,
       description: 'Scenario ids to run, e.g. ["SC-004"]. The rook scenarios tool lists them.',
@@ -1593,7 +1606,7 @@ export const register: Register = (on, options) => {
         required: ['action', 'ids'],
         properties: {
           action: { type: 'string', enum: ['exclude', 'include'] },
-          ids: { type: 'array', items: { type: 'string', pattern: '^SC-\\d{1,6}$' }, minItems: 1, maxItems: 200, description: 'Scenario ids, e.g. ["SC-004"]' },
+          ids: { type: 'array', items: { type: 'string', pattern: '^SC-\\d{3,6}$' }, minItems: 1, maxItems: 200, description: 'Scenario ids, e.g. ["SC-004"]' },
         },
       },
     })
@@ -1675,8 +1688,13 @@ export const register: Register = (on, options) => {
     ctx.isPrimed = true
     $.clock.every(POLL_MS, () => poll($, ctx))
     // Installed and signed in are asked once, off the start path: `rook auth status` is a network call.
-    $.clock.after(0, () => probeThenPoll($, ctx))
-    $.clock.after(0, () => refreshBalance($, ctx))
+    $.clock.after(0, async () => {
+      // After the install probe, so a missing rook costs one failed call, not two.
+      await probeThenPoll($, ctx)
+      if (ctx.cli.version !== null) {
+        await refreshBalance($, ctx)
+      }
+    })
 
     if (ctx.paneMode === 'auto' && ctx.located !== undefined) {
       void $.ui.open({ id: PANE, title: 'rook' })
@@ -1900,7 +1918,8 @@ export const register: Register = (on, options) => {
     const failing = [...new Set([...failed.map(row => row.id), ...earlier.map(row => row.id)])]
     const health = countsOf(snapshot.current)
     const moved = changesIn(snapshot.current, run?.runId)
-    const canAct = running === null && runBlock === undefined // switching agents needs only nothing in flight
+    // Runs need nothing in flight and a checklist that allows them; the agent switch below needs only the first.
+    const canAct = running === null && runBlock === undefined
     const toggle = (id: string) => update($, expandedAtom, open => (open === id ? null : id))
 
     const rowDetail = (row: RookScenarioRow, isFixable = true) => (

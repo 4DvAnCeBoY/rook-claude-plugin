@@ -684,10 +684,11 @@ describe('depth · rca, agents, curation, balance', () => {
 
   test('curation: exclude and include of scenario ids only; delete is never built', () => {
     expect(curateArgs('exclude', ['SC-004', 'SC-007', 'SC-004'])).toEqual({ argv: ['scenarios', 'exclude', 'SC-004', 'SC-007', '--json'] })
-    expect(curateArgs('include', ['SC-1'])).toEqual({ argv: ['scenarios', 'include', 'SC-1', '--json'] })
+    expect(curateArgs('include', ['SC-001'])).toEqual({ argv: ['scenarios', 'include', 'SC-001', '--json'] })
+    expect(curateArgs('include', ['SC-1'])).toHaveProperty('error') // rook's ids have three digits or more
     expect(curateArgs('delete', ['SC-004'])).toHaveProperty('error')
     expect(curateArgs('list', ['SC-004'])).toHaveProperty('error')
-    expect((curateArgs('exclude', ['SC-4', '--yes']) as { error: string }).error).toContain('not scenario ids (SC-001 form): --yes')
+    expect((curateArgs('exclude', ['SC-004', '--yes']) as { error: string }).error).toContain('not scenario ids (SC-001 form): --yes')
     expect(curateArgs('exclude', [])).toHaveProperty('error')
     expect(curateArgs('exclude', 'SC-004')).toHaveProperty('error')
     expect(curateText({ ok: true, verb: 'exclude', changed: ['SC-004'], unknown: [] })).toBe(

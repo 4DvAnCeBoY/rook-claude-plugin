@@ -748,7 +748,7 @@ describe('setup from inside Claude Code', () => {
   })
 
   test('explore: streamed with the approvals, then the pane finds the new workspace', async ($, on) => {
-    const { world } = await start($, on, { 'README.md': '# agent' })
+    const { world } = await start($, on, { '.testmuai/rook/settings.json': JSON.stringify({ version: 1, active_project_id: '01M0EXAMP1EPR0JECT0000000A' }), 'README.md': '# agent' })
 
     expect(world.opened).toEqual([])
     world.onRun = () => ({
@@ -778,7 +778,7 @@ describe('setup from inside Claude Code', () => {
   })
 
   test("explore: rook's failure is reported, and points at the project tool when it is about the project", async ($, on) => {
-    const { world } = await start($, on, { 'README.md': '# agent' })
+    const { world } = await start($, on, { '.testmuai/rook/settings.json': JSON.stringify({ version: 1, active_project_id: '01M0EXAMP1EPR0JECT0000000A' }), 'README.md': '# agent' })
 
     world.onRun = () => ({ code: 1, stdout: '', stderr: 'no project selected — rook project use <id>\n' })
     const ran = (await $.tool.call({ tool: 'mcp__rook__explore' } as never)) as Ran

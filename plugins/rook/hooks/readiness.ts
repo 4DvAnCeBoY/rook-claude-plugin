@@ -1,5 +1,5 @@
 import type { RookReadiness, RookReadyStep, RookStepId } from '../types'
-import { projectIdOf, ROOT, SCENARIO_ID } from './workspace'
+import { activeAgentOf, agentIdsOf, isProjectDir, projectDirName, projectIdOf, ROOT, SCENARIO_ID } from './workspace'
 import type { Io } from './workspace'
 
 /**
@@ -53,10 +53,14 @@ const SHORT: Record<RookStepId, string> = {
 }
 
 /** What each action needs before rook will take it (rook's own gate table: explore needs a project, generate an active agent). */
-export const NEEDS: Record<'run' | 'generate' | 'status', readonly RookStepId[]> = {
+export const NEEDS: Record<'run' | 'generate' | 'status' | 'explore' | 'profileTest', readonly RookStepId[]> = {
   run: ['installed', 'signed_in', 'project', 'agent', 'scenarios', 'profile'],
   generate: ['installed', 'signed_in', 'project', 'agent'],
   status: ['installed', 'signed_in', 'project'],
+  // explore is what writes the agent, so it cannot need one
+  explore: ['installed', 'signed_in', 'project'],
+  // a profile test calls the agent once: no scenarios needed, and it may name a profile that is not the active one
+  profileTest: ['installed', 'signed_in', 'project', 'agent'],
 }
 
 const names = async (io: Io, path: string, kind: string): Promise<string[]> =>
@@ -78,9 +82,7 @@ export async function diskFacts(io: Io): Promise<DiskFacts> {
 
   // The project directory the mod reads results from: the selected one, or the
   // only one. Results stay readable even when rook would refuse to run.
-  const project =
-    projects.find(name => projectId !== undefined && (name === projectId || name.endsWith(`--${projectId}`))) ??
-    (projects.length === 1 ? projects[0] : undefined)
+  const project = projectDirName(projects, projectId)
   const facts: DiskFacts = { hasWorkspace, ...(settingsText !== undefined && { settingsText }), ...(projectId !== undefined && { projectId }), agents: [], scenarios: 0, profiles: [] }
 
   if (project === undefined) {
@@ -90,14 +92,12 @@ export async function diskFacts(io: Io): Promise<DiskFacts> {
   const projectDir = `${ROOT}/projects/${project}`
   const projectName = /^name:\s*(.+?)\s*$/m.exec((await io.read(`${projectDir}/project.yaml`)) ?? '')?.[1]?.replace(/^(['"])(.*)\1$/, '$2')
 
-  if (projectName !== undefined && projectId !== undefined && project !== undefined && (project === projectId || project.endsWith(`--${projectId}`))) {
+  if (projectName !== undefined && projectId !== undefined && isProjectDir(project, projectId)) {
     facts.projectName = projectName
   }
 
-  const agents = (await names(io, `${projectDir}/agents`, 'dir')).sort()
-  const active = (await io.read(`${projectDir}/active`))?.trim()
-  // One agent is not a choice, so rook takes it without a pointer; several is.
-  const agentId = active !== undefined && agents.includes(active) ? active : agents.length === 1 ? agents[0] : undefined
+  const agents = await agentIdsOf(io, `${projectDir}`)
+  const agentId = activeAgentOf(agents, (await io.read(`${projectDir}/active`))?.trim())
 
   if (agentId === undefined) {
     return { ...facts, agents }

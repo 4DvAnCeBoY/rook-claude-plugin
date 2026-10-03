@@ -184,3 +184,31 @@ describe('readiness · command output never repeats "rook"', () => {
     expect((await $.command.run(command('report'))).text).toMatch(/^run 2026-09-28T15-48-44Z \(hardened adversarial matrix\) against agent commercecare/)
   })
 })
+
+describe('readiness · setup tools', () => {
+  test('explore and a profile test refuse up front with the next step, and nothing reaches rook', async ($, on) => {
+    const { world } = await start($, on, noProject())
+
+    const explored = (await $.tool.call({ tool: 'mcp__rook__explore' } as never)) as Ran
+    const tested = (await $.tool.call({ tool: 'mcp__rook__profile_test', action: 'test' } as never)) as Ran
+
+    expect(asText(explored)).toContain("can't explore this repository yet: no project selected.")
+    expect(asText(tested)).toContain("can't test a profile yet: no project selected.")
+    expect((await $.command.run(command('explore'))).text).toContain("can't explore this repository yet")
+    expect((await $.command.run(command('profile test'))).text).toContain("can't test a profile yet")
+    expect(world.invocations.filter(argv => argv[1] === 'explore' || argv[2] === 'test')).toEqual([])
+  })
+
+  test('explore needs no agent: it is what writes one', async ($, on) => {
+    const files = workspace()
+    for (const path of Object.keys(files)) {
+      if (path.includes('/agents/')) delete files[path]
+    }
+    const { world } = await start($, on, files)
+
+    world.onRun = () => ({ code: 0, stdout: 'nothing changed — every agent is current\n' })
+    await $.tool.call({ tool: 'mcp__rook__explore' } as never)
+
+    expect(world.invocations.at(-1)?.slice(0, 2)).toEqual(['rook', 'explore'])
+  })
+})
