@@ -27,6 +27,10 @@ export type World = {
   isMissingBinary: boolean
   /** Called while a spawned rook is running, before it prints. */
   during: (() => Promise<void>) | undefined
+  /** `rook --version` and `rook auth status`: the readiness probes, kept out of `invocations`. */
+  version: { stdout: string; code: number }
+  auth: { stdout: string; code: number }
+  probes: string[][]
 }
 
 const relOf = (path: string) => (path.startsWith(`${CWD}/`) ? path.slice(CWD.length + 1) : path.replace(/^\.\//, ''))
@@ -47,6 +51,9 @@ export function worldOf(on: On, files: Readonly<Record<string, string>>, env: Re
     answer: () => undefined,
     isMissingBinary: false,
     during: undefined,
+    version: { stdout: 'rook 0.1.0\n', code: 0 },
+    auth: { stdout: 'signed in as dev · Example Org · team\n', code: 0 },
+    probes: [],
   }
 
   on('fs.read', ($, e) => {
@@ -76,6 +83,13 @@ export function worldOf(on: On, files: Readonly<Record<string, string>>, env: Re
   on('process.run', ($, e) => {
     if (world.isMissingBinary) {
       return { deny: `ENOENT: ${e.argv[0]}` }
+    }
+
+    if (e.argv[1] === '--version' || e.argv[1] === 'auth') {
+      world.probes.push([...e.argv])
+      const probe = e.argv[1] === 'auth' ? world.auth : world.version
+
+      return { value: { exitCode: probe.code, stdout: probe.stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
 
     world.invocations.push([...e.argv])

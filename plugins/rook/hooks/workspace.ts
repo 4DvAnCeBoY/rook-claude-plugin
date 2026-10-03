@@ -34,7 +34,7 @@ export type Located = { projectDir: string; agentId: string; agentDir: string }
 const dirs = async (io: Io, path: string): Promise<string[]> =>
   (await io.list(path).catch(() => [])).filter(entry => entry.kind === 'dir').map(entry => entry.name)
 
-function projectIdOf(settings: unknown): string | undefined {
+export function projectIdOf(settings: unknown): string | undefined {
   if (typeof settings !== 'object' || settings === null) {
     return undefined
   }

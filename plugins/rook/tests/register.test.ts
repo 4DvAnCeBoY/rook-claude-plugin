@@ -185,11 +185,13 @@ describe('2 · the pane', () => {
     expect(await ui.find({ key: 'viewer-link' })).toBeDefined()
   })
 
-  test('outside a workspace the pane says how to start', async ($, on) => {
+  test('outside a workspace the pane shows the setup checklist with the next step', async ($, on) => {
     await start($, on, {})
     const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE.props, requestId: 'rook', viewport: PANE.viewport })
 
-    expect(await ui.find({ text: /rook explore/ })).toBeDefined()
+    expect((await ui.find({ key: 's-project' }))?.text).toBe('✗ no project selected')
+    expect((await ui.find({ key: 's-agent' }))?.text).toBe('✗ no agent yet')
+    expect((await ui.find({ key: 'next' }))?.text).toContain('mcp__rook__project')
     expect(await ui.findAll({ type: 'Button' })).toHaveLength(0)
   })
 
@@ -321,7 +323,7 @@ describe('1 · tools Claude calls', () => {
     world.onRun = () => ({ code: 1, stdout: JSON.stringify({ ok: false, error: 'signed out', remedy: 'login' }) })
     const ran = (await $.tool.call({ tool: 'mcp__rook__run' } as never)) as Ran
 
-    expect(asText(ran)).toBe('rook run did not complete: signed out (remedy: login)')
+    expect(asText(ran)).toBe('rook run did not complete: signed out (remedy: login)\ncan\'t run yet: not signed in. Next: run `! rook login` (it opens a browser).')
   })
 
   test('report: reads the latest run from disk without running anything', async ($, on) => {
@@ -537,7 +539,7 @@ describe('6 · /rook', () => {
     expect(world.toasts.at(-1)).toContain('1 feature already covered')
 
     world.onRun = () => ({ code: 0, stdout: 'http://127.0.0.1:5000/\n' })
-    expect((await $.command.run(command('ui'))).text).toContain('rook viewer: http://127.0.0.1:5000/')
+    expect((await $.command.run(command('ui'))).text).toBe('viewer: http://127.0.0.1:5000/ (read only: scenarios, runs, request/response and evidence files)')
   })
 
   test('run passes the instruction after --', async ($, on) => {
@@ -555,7 +557,11 @@ describe('6 · /rook', () => {
 
     world.isMissingBinary = true
 
-    expect((await $.command.run(command('status'))).text).toMatch(/^rook status failed: could not run rook/)
+    const text = (await $.command.run(command('status'))).text
+
+    expect(text).toContain('✗ rook not found')
+    expect(text).toContain('Next: install it with `! brew install lambdatest/rook/rook`')
+    expect(world.invocations).toEqual([])
   })
 })
 
