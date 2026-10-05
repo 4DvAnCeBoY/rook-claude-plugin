@@ -32,7 +32,7 @@ It keeps rook's vocabulary. **Unable to Verify is not Fail**: it is counted and 
 From GitHub, inside Claude Code:
 
 ```
-/plugin marketplace add 4DvAnCeBoY/rook-claude-plugin
+/plugin marketplace add LambdaTest/rook-claude-plugin
 /plugin install rook@rook-claude-plugin
 ```
 
@@ -54,6 +54,32 @@ Set them in `/config` or under `pluginConfigs.rook` in settings.
 | `prodGuard` | `true` | Refuse runs against a production-looking target until confirmed |
 | `prodPatterns` | `prod,production,live` | Whole words that mark a target as production |
 | `allowRules` | *(empty)* | rook's own tool calls during `run` and `generate` are approved with `--yes`; list rules (`;`-separated) to pass `--allow` for each instead, and rook declines the rest |
+
+## What this plugin runs, reads and sends
+
+The plugin itself makes no network requests and holds no keys. Everything below is visible with `claude plugin validate .` (its `hooks:` and `calls:` lines).
+
+**Runs**
+- The `rook` CLI (or the path you set in `rookPath`), in the session's directory. When a session starts it runs `rook --version`, `rook auth status` and `rook plan --json` (credits left), and runs `plan` again after anything that spends credits. The pane's refresh reads files only. `rook run`, `generate`, `explore`, `report --rca` and `profile test` run only when you or Claude ask, and Claude Code asks your permission before Claude calls a tool that spends credits.
+- `rook ui --local --no-open`, only when you open the evidence viewer: rook's read-only viewer, served on localhost.
+
+**What rook does when it runs** (rook's behaviour, not the plugin's): it sends your agent's code, features and scenarios to TestMu AI's rook service to explore, plan and judge, and it calls **your agent** through the profile you configured. A run's actions on your agent are real.
+
+**Reads**
+- `.testmuai/rook/` in the session's directory: settings, scenarios, features, profiles, runs, verdicts and remedies.
+- `~/.testmuai/rook/env.json` (rook's variable store, written by `rook env set`), for the production guard only. It reads the values of the variables the active profile declares, checks them for production markers and never shows, stores or sends a value.
+- The `TMPDIR` environment variable, to place profile-test state folders.
+
+**Writes**
+- Nothing in your repository. rook writes `.testmuai/rook/` itself.
+- A fresh `rook-profile-test-<time>/` folder under the system temp directory for each profile test it starts, passed to rook as `ROOK_STATE_DIR` / `ROOK_RUN_STATE_DIR`.
+
+**Inside the session**
+- **Tools and command:** it adds the rook tools (`mcp__rook__*`) and the `/rook` command.
+- **Production guard:** it watches Claude's `Bash` calls only to refuse a `rook run` against a production-looking target until you type `/rook confirm-prod`. It never approves a tool call.
+- **Re-test band:** it watches Claude's file edits only to offer a re-test of the scenarios an edited file affects.
+- **Prompts it sends:** it submits a prompt to Claude only when you press a pane or band button such as **Re-test** or **Fix with Claude**.
+- **Messages it adds:** it adds a run's failures to the conversation when a run started elsewhere finishes with failures. Turn this off with `failureContext`.
 
 ## How it talks to rook
 

@@ -74,18 +74,16 @@ More: [Getting started](docs/getting-started.md) (with screenshots) · [User gui
 Inside Claude Code:
 
 ```
-/plugin marketplace add 4DvAnCeBoY/rook-claude-plugin
+/plugin marketplace add LambdaTest/rook-claude-plugin
 /plugin install rook@rook-claude-plugin
 ```
 
 Restart Claude Code once so the plugin loads.
 
-> While this repository is private, only accounts with access to it can add it. Others can use the clone option below once it's public.
-
 ### From a clone
 
 ```bash
-git clone https://github.com/4DvAnCeBoY/rook-claude-plugin.git ~/rook-claude-plugin
+git clone https://github.com/LambdaTest/rook-claude-plugin.git ~/rook-claude-plugin
 cd ~/path/to/your-agent-repo
 claude --plugin-dir ~/rook-claude-plugin/plugins/rook
 ```

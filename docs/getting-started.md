@@ -18,7 +18,7 @@ This guide covers the two situations you will be in:
    ```
 2. Install the plugin. Inside Claude Code:
    ```
-   /plugin marketplace add 4DvAnCeBoY/rook-claude-plugin
+   /plugin marketplace add LambdaTest/rook-claude-plugin
    /plugin install rook@rook-claude-plugin
    ```
    Restart Claude Code once.

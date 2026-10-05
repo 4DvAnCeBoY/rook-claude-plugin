@@ -49,7 +49,7 @@ Use one of these two procedures.
 **From GitHub:**
 
 1. Start Claude Code.
-2. Type `/plugin marketplace add 4DvAnCeBoY/rook-claude-plugin`.
+2. Type `/plugin marketplace add LambdaTest/rook-claude-plugin`.
 3. Type `/plugin install rook@rook-claude-plugin`.
 4. Stop Claude Code and start it again.
 
