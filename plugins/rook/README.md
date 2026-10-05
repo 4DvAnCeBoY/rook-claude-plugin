@@ -4,13 +4,15 @@
 
 A Claude Code mod for [rook](https://github.com/LambdaTest/rook), TestMu AI's agent-assurance CLI. It puts rook's verdicts where your agent is being written. Claude can run the scenarios, read rook's evidence and fix what failed, and you watch it happen in a live pane.
 
+> **New here?** Watch the [walkthrough video](../../docs/media/rook-plugin-walkthrough.mp4) and read [Getting started](../../docs/getting-started.md): one path for a repository with no rook tests, one for a repository that has them.
+
 > Status: early access, like Claude Code's function-hooks API it is built on. Requires Claude Code 2.1.288 or newer and the rook CLI on `PATH` (`brew install lambdatest/rook/rook`).
 
 ## What it does
 
 | | |
 |---|---|
-| **Claude runs rook** | Five tools Claude can call: `run` (execute scenarios, get verdicts back), `report` (read a finished run from disk, no credits), `status`, `scenarios` (every scenario with its latest verdict, so Claude picks `only` without guessing) and `generate` (write scenarios). Failures come back grouped into rook's clusters. With `rca`, each cluster has its cause, fault, files and the proposed diff from `remedies/CL-xx.md`, followed by rook's narrative and next steps. `run` also takes `tags`, `profile`, `concurrency`, `resume`, `continueRun` + `phases`, and a free-text `instruction`. |
+| **Claude runs rook** | Eleven tools in all. The core five: `run` (execute scenarios, get verdicts back), `report` (read a finished run from disk, no credits), `status`, `scenarios` (every scenario with its latest verdict, so Claude picks `only` without guessing) and `generate` (write scenarios). Failures come back grouped into rook's clusters. With `rca`, each cluster has its cause, fault, files and the proposed diff from `remedies/CL-xx.md`, followed by rook's narrative and next steps. `run` also takes `tags`, `profile`, `concurrency`, `resume`, `continueRun` + `phases`, and a free-text `instruction`. |
 | **Setup inside Claude Code** | Three more tools for a repository with no rook setup: `project` (list, `use` or `create` the rook project), `explore` (`rook explore .`: find the agents, write their features; spends credits, takes minutes) and `profile_test` (list profiles, `use` one, or `test` one: a single call to the agent, under the production guard). Adding a profile needs your connection details, so Claude asks you to type `! rook profile add <name> --from connection.md` yourself. |
 | **History** | The `runs` tool and `/rook runs [N]` list the agent's runs on disk, newest first (size, Pass / Fail / Unable to Verify, credits, local test runs), so Claude can name an older run for `report` or its `rca` option. Each scenario's latest verdict looks back over the newest 30 runs, and keeps looking up to 300 for scenarios those did not judge. Scenarios or features changed outside the session (`rook generate` in another terminal) are picked up on the next poll. When the selected project has no runs but another project folder here does, the pane says where they are. |
 | **Depth** | `report` with `rca: true` runs `rook report <run> --rca` on a finished run: rook explains its clusters without calling the agent again (free when that agent version was explained already, otherwise it costs credits); the pane's **Explain with rca** does the same. `agent` lists the project's agents and switches with `use` (the pane offers the switch when there is more than one). `curate` excludes or includes scenarios; delete is left to the terminal. The pane header and `status` show the credit balance (`rook plan`), and a run's result warns when it will not cover the re-test. |
@@ -36,7 +38,7 @@ From GitHub, inside Claude Code:
 
 Or from a clone, for one session: `claude --plugin-dir <clone>/plugins/rook`.
 
-Open Claude Code in a repository that has a rook workspace (`.testmuai/rook/`, created by `rook explore .`). The pane opens by itself when the terminal is wide enough to dock it. Otherwise, type `/rook`.
+Open Claude Code in your agent's repository. With a rook workspace (`.testmuai/rook/`) the pane opens by itself when the terminal is wide enough to dock it; otherwise type `/rook`. Without one, the mod stays quiet until you type `/rook`, which shows the setup checklist.
 
 ## Options
 
@@ -58,7 +60,7 @@ Set them in `/config` or under `pluginConfigs.rook` in settings.
 Only through rook's published contract:
 
 - The CLI's `--json` documents: `rook run --json`, `rook generate --json`, `rook status --json`, `rook scenarios list --json`, `rook scenarios exclude|include --json`, `rook plan --json`, plus `rook ui --local --no-open` for the viewer's address. `rook agent` and `rook report --rca` answer in prose, so the mod reads the agent list from it (or the agent directories) and re-reads the explained run from disk.
-- For setup: `rook project --json` (or the plain `rook project` listing of an older rook), `rook project use|create`, `rook explore . --json`, `rook profile`, `rook profile use|test`. explore and profile test print prose even with `--json`, so the mod reads their closing lines.
+- For setup: `rook project --json` (or the plain `rook project` listing of an older rook), `rook project use|create`, `rook explore . --json`, `rook profile`, `rook profile use|test`. explore and profile test print prose even with `--json`, so the mod reads their closing lines. An older rook also answers `generate --json` with a prose line (`7 scenario(s) written, 0 already current, 553.12 credits`); the mod reads that line instead of reporting nothing written.
 - The documented `.testmuai/rook/` layout: `run.yaml`, `report.yaml` (written last, so its presence means finished; its `clusters`, `narrative` and `next`), `remedies/<cluster>.md`, and `scenarios/<id>/verdict.yaml`. A scenario folder with no verdict yet is in flight. Its phase comes from `hooks.json`, `request.json` and `response.json`.
 
 The mod holds no prompts and no model keys. It passes rook only validated flags:

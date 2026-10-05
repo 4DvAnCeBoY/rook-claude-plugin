@@ -815,7 +815,7 @@ async function generateRun($: EngineInterface, ctx: Ctx, request: GenerateReques
 
     return problem !== undefined && (result.doc === undefined || (result.doc as { ok?: unknown }).ok === false)
       ? await explained($, ctx, result, `rook generate did not complete: ${problem}`, NEEDS.generate, 'generate scenarios')
-      : generateText(result.doc) + (problem ? `\n${problem}` : '')
+      : generateText(result.doc, result.stdout ?? '') + (problem ? `\n${problem}` : '')
   } finally {
     ctx.agentIndex = undefined // the scenario set changed
     ctx.isDirty = true

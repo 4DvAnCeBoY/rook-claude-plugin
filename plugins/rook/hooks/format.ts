@@ -400,10 +400,47 @@ export function statusText(doc: unknown): string {
   ].join('\n')
 }
 
+/**
+ * What an older rook prints for `generate --json`: prose, not a document.
+ * `7 scenario(s) written, 0 already current, 2 the plan left alone, 553.12 credits`, then summary lines.
+ */
+function generateProse(stdout: string): string | undefined {
+  const said = /(\d+) scenario\(s\) written(?:, (\d+) already current)?(?:, (\d+) the plan left alone)?(?:, (\d+(?:\.\d+)?) credits)?/.exec(stdout)
+
+  if (said === null) {
+    return undefined
+  }
+
+  const [line, written, current, declined, spent] = said
+  const count = Number(written)
+  const rest = stdout
+    .split('\n')
+    .map(text => text.trim())
+    .filter(text => text !== '' && text !== line.trim() && !/^(on disk only|next:)/.test(text))
+
+  return [
+    `rook generate: ${plural(count, 'scenario file')} written` +
+      `${Number(current ?? 0) > 0 ? `, ${plural(Number(current), 'feature')} already covered` : ''}` +
+      `${Number(declined ?? 0) > 0 ? `, ${plural(Number(declined), 'feature')} the plan left alone` : ''}` +
+      `${spent === undefined ? '' : ` · ${credits(Number(spent))}`}.`,
+    ...rest.slice(0, 6).map(text => `  ${clip(text, 300)}`),
+    ...(count > 0 ? ['Run the new scenarios with the rook run tool; the rook scenarios tool lists their ids.'] : []),
+  ].join('\n')
+}
+
 /** `rook generate --json` in a few lines: what was written, what was left, and why. */
-export function generateText(doc: unknown): string {
+export function generateText(doc: unknown, stdout = ''): string {
   type Declined = { feature_id?: string; local_id?: string; reason?: string; why?: string }
   const result = doc as { written?: string[]; skipped?: string[]; declined?: Declined[]; gaps?: string[]; credits?: number; summaries?: string[] } | undefined
+
+  if (!Array.isArray(result?.written)) {
+    const prose = generateProse(stdout)
+
+    if (prose !== undefined) {
+      return prose
+    }
+  }
+
   const written = Array.isArray(result?.written) ? result.written : []
   const skipped = Array.isArray(result?.skipped) ? result.skipped : []
   const declined = Array.isArray(result?.declined) ? result.declined : []
