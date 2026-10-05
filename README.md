@@ -15,7 +15,7 @@ A Claude Code plugin for [rook](https://github.com/LambdaTest/rook), TestMu AI's
 | **Has no rook tests yet** (no `.testmuai/rook/`) | Type `/rook` for a setup checklist, or ask Claude to *"set rook up for this repo"*. Claude creates the project, explores the code and writes scenarios; you add the profile with one `!` command; then Claude runs and fixes. | [Case A](docs/getting-started.md#case-a-a-repository-with-no-rook-tests-yet) |
 | **Already has rook tests** | Open Claude Code there. The pane reads every scenario and run already on disk (nothing is re-run), shows each scenario's newest verdict, and Claude can read, explain and re-test from history. | [Case B](docs/getting-started.md#case-b-a-repository-that-already-has-rook-tests) |
 
-More: [Getting started](docs/getting-started.md) (with screenshots) · [User guide](docs/user-guide.md) (ASD-STE100) · [Explainer](docs/explainer.html) (plain words, diagrams) · [How the plugin reads rook](plugins/rook/README.md)
+More: [Getting started](docs/getting-started.md) (with screenshots) · [User guide](docs/user-guide.md) · [Explainer](docs/explainer.html) (plain words, diagrams) · [How the plugin reads rook](plugins/rook/README.md)
 
 ```
 ┌ rook · commercecare · profile commerce-hooks ────────────┐
