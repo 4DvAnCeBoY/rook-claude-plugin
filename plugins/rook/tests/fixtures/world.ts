@@ -18,11 +18,29 @@ export type World = {
   tools: string[]
   /** argv of every rook invocation */
   invocations: string[][]
+  /** The environment each spawned rook was given, beside its argv. */
+  spawnEnvs: Record<string, string>[]
   /** What the fake `rook run` does: write files, then print this document. */
-  onRun: (argv: readonly string[]) => { stdout: string; code: number; writes?: Record<string, string> }
+  onRun: (argv: readonly string[]) => { stdout: string; code: number; stderr?: string; writes?: Record<string, string> }
   status: { stdout: string; code: number }
+  /** A per-argv answer for a short command; `status` answers whatever this leaves undefined. */
+  answer: (argv: readonly string[]) => { stdout: string; code: number; stderr?: string } | undefined
+  /** Answers for one short command, by its words after `rook` (`agent use`, `scenarios exclude`): the longest match wins over `status`. */
+  replies: Record<string, { stdout: string; code: number; writes?: Record<string, string> }>
+  /**
+   * `rook plan --json`. Balance checks are counted here rather than in
+   * `invocations`, so a test about what ran stays about what ran.
+   */
+  plan: { stdout: string; code: number }
+  planChecks: number
   /** When set, `$.process` cannot start the binary at all. */
   isMissingBinary: boolean
+  /** Called while a spawned rook is running, before it prints. */
+  during: (() => Promise<void>) | undefined
+  /** `rook --version` and `rook auth status`: the readiness probes, kept out of `invocations`. */
+  version: { stdout: string; code: number }
+  auth: { stdout: string; code: number }
+  probes: string[][]
 }
 
 const relOf = (path: string) => (path.startsWith(`${CWD}/`) ? path.slice(CWD.length + 1) : path.replace(/^\.\//, ''))
@@ -38,9 +56,18 @@ export function worldOf(on: On, files: Readonly<Record<string, string>>, env: Re
     commands: [],
     tools: [],
     invocations: [],
+    spawnEnvs: [],
     onRun: () => ({ stdout: JSON.stringify({ ok: true, halted: false, credits: 0 }), code: 0 }),
     status: { stdout: JSON.stringify({ project_id: 'P', offline: false, agents: [] }), code: 0 },
+    answer: () => undefined,
+    replies: {},
+    plan: { stdout: JSON.stringify({ username: 'dev', subscription: 'Team', credits: 120.5 }), code: 0 },
+    planChecks: 0,
     isMissingBinary: false,
+    during: undefined,
+    version: { stdout: 'rook 0.1.0\n', code: 0 },
+    auth: { stdout: 'signed in as dev · Example Org · team\n', code: 0 },
+    probes: [],
   }
 
   on('fs.read', ($, e) => {
@@ -72,21 +99,57 @@ export function worldOf(on: On, files: Readonly<Record<string, string>>, env: Re
       return { deny: `ENOENT: ${e.argv[0]}` }
     }
 
-    world.invocations.push([...e.argv])
+    if (e.argv[1] === '--version' || e.argv[1] === 'auth') {
+      world.probes.push([...e.argv])
+      const probe = e.argv[1] === 'auth' ? world.auth : world.version
 
-    return { value: { exitCode: world.status.code, stdout: world.status.stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+      return { value: { exitCode: probe.code, stdout: probe.stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
+
+    const words = e.argv.slice(1).join(' ')
+
+    if (words === 'plan --json') {
+      world.planChecks += 1
+
+      return { value: { exitCode: world.plan.code, stdout: world.plan.stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
+
+    world.invocations.push([...e.argv])
+    const key = Object.keys(world.replies)
+      .filter(prefix => words === prefix || words.startsWith(`${prefix} `))
+      .sort((a, b) => b.length - a.length)[0]
+    const reply: { stdout: string; code: number; stderr?: string; writes?: Record<string, string> } =
+      world.answer(e.argv) ?? (key === undefined ? world.status : world.replies[key]!)
+
+    for (const [path, text] of Object.entries(reply.writes ?? {})) {
+      world.files.set(path, text)
+    }
+
+    return { value: { exitCode: reply.code, stdout: reply.stdout, stderr: reply.stderr ?? '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
 
   on('process.spawn', async function* ($, e) {
     world.invocations.push([...e.argv])
+    world.spawnEnvs.push({ ...((e as { env?: Record<string, string> }).env ?? {}) })
     const ran = world.onRun(e.argv)
 
     for (const [path, text] of Object.entries(ran.writes ?? {})) {
       world.files.set(path, text)
     }
 
+    await world.during?.()
     yield { stream: 'stderr' as const, text: 'running…\n' }
-    yield { stream: 'stdout' as const, text: ran.stdout }
+    if (ran.stderr !== undefined) {
+      yield { stream: 'stderr' as const, text: ran.stderr }
+    }
+    if (ran.stdout !== '') {
+      yield { stream: 'stdout' as const, text: ran.stdout }
+    }
+
+    // `rook ui --local` serves until it is stopped
+    if (e.argv[1] === 'ui') {
+      await new Promise(() => undefined)
+    }
 
     return { value: { code: ran.code, signal: null } } as never
   })
@@ -136,6 +199,8 @@ export function worldOf(on: On, files: Readonly<Record<string, string>>, env: Re
   })
 
   on('session.start', ($, e) => ({ cwd: e.cwd }))
+  // the spinner as the engine draws it: its message while one overrides the word
+  on('ui.render', { component: 'Spinner' }, ($, e) => ({ type: 'Text', children: [e.props.message ?? e.props.word] }) as never)
   // what the engine draws where no plugin draws: never a Box, so a test tells the plugin's own apart
   on('ui.render', () => ({ type: 'Text', children: [''] }) as never)
 

@@ -18,9 +18,41 @@ export type RookScenarioRow = {
   reason?: string
   /** What the judge could not look at, even on a Pass. */
   gaps: string[]
+  /** What rook said about each criterion it could not check: the way to make it observable. */
+  unchecked: string[]
   compromised: boolean
   summary: string
   failing: RookFailingCriterion[]
+}
+
+/**
+ * A group of failures rook found one shape for (report.yaml `clusters`).
+ * `cause` onwards are present once `--rca` explained it.
+ */
+export type RookCluster = {
+  id: string
+  why: string
+  /** `failed`, `unverifiable` or `compromised`. */
+  kind: string
+  featureId?: string
+  scenarios: { id: string; title: string }[]
+  cause?: string
+  remedy?: string
+  /** `agent`, `scenario`, `harness` or `unclear`: whose fault the failure is. */
+  fault?: string
+  confidence?: string
+  /** Files rook says to open. */
+  where: string[]
+}
+
+/** A scenario in flight: its directory exists, its verdict does not yet. */
+export type RookLane = {
+  id: string
+  title: string
+  /** The last phase rook's hooks finished, or `starting` / `judging`. */
+  phase: string
+  /** When the scenario started, ms since epoch. */
+  since: number
 }
 
 export type RookRunView = {
@@ -32,16 +64,57 @@ export type RookRunView = {
   finished: boolean
   counts: RookCounts
   rows: RookScenarioRow[]
+  lanes: RookLane[]
+  clusters: RookCluster[]
   passRate?: number
   credits?: number
+  durationMs?: number
   headline?: string
+  narrative?: string
+  next: string[]
 }
 
+/** One scenario's newest verdict across every run, and the one before it. */
+export type RookCurrent = {
+  id: string
+  title: string
+  status: RookStatus
+  runId: string
+  /** The verdict this scenario had in the run before `runId`, if any. */
+  was?: RookStatus
+}
+
+export type RookStepId = 'installed' | 'signed_in' | 'project' | 'agent' | 'scenarios' | 'profile'
+
+/** One step of the setup checklist; `hint` is the exact next action when it is not ticked. */
+export type RookReadyStep = { id: RookStepId; label: string; ok: boolean; hint?: string }
+
+export type RookReadiness = {
+  steps: RookReadyStep[]
+  /** The first unticked step's hint: what to do next. */
+  next?: string
+  /** `.testmuai/rook/` exists here: outside one the mod stays silent. */
+  hasWorkspace: boolean
+}
+
+/** A background run or generate that failed: kept in the pane until the next one starts. */
+export type RookLastError = { source: 'run' | 'generate'; text: string; at: number }
+
 export type RookSnapshot = {
+  /** Undefined when no agent can be read from disk: the pane shows the setup checklist. */
   agentId?: string
+  profileId?: string
   latest?: RookRunView
-  previous?: { runId: string; passed: number; failed: number }
+  /** Every scenario's newest verdict, newest runs first: the agent's health, whatever the last run's scope. */
+  current: RookCurrent[]
+  /** Scenarios the agent has that no run has judged yet. */
+  neverRun: number
+  /** Runs of this agent on disk. */
+  runCount?: number
+  /** Runs kept under project folders other than the selected one: rook reads only the selected project. */
+  elsewhere?: { project: string; runs: number }[]
   checkedAt: number
+  readiness?: RookReadiness
 }
 
 export type RookStale = {
@@ -49,6 +122,8 @@ export type RookStale = {
   scenarios: { id: string; title: string }[]
   /** True when no feature names the file: every scenario of the agent may be affected. */
   isWholeAgent: boolean
+  /** What re-testing them would cost at the latest run's credits per scenario. */
+  estimate?: number
   since: number
 }
 
@@ -71,6 +146,20 @@ declare module 'claude-code' {
       /** The newest finished run this session has already reported on. */
       seenFinished: string | null
       isBandHidden: boolean
+      /** The pane row opened to show its detail: a scenario id or a cluster id. */
+      expanded: string | null
+      /** The address `rook ui --local` serves on, once started. */
+      viewerUrl: string | null
+      /** Bumped while a run is in flight, so elapsed times redraw. */
+      tick: number
+      /** The last background failure, until the next run or generate starts. */
+      lastError: RookLastError | null
+      /** The project's agent ids, for the pane's switch. */
+      agents: string[]
+      /** `rook plan` credits available; null until fetched or when rook could not say. */
+      balance: number | null
+      /** The run `rook report --rca` is explaining now. */
+      explaining: string | null
     }
   }
 }
