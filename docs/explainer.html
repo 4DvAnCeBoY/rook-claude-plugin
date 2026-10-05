@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rook in Claude Code, Explained</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Source+Sans+3:wght@400;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column (~66ch) with full-width diagram panels; chess-board motif only in the rook mark and the board-square legend. */
+:root {
+  --paper: #f6f7f9;
+  --panel: #ffffff;
+  --ink: #1b2230;
+  --muted: #5a6475;
+  --line: #c9d0db;
+  --accent: #3157c8;
+  --accent-soft: rgba(49, 87, 200, 0.10);
+  --pass: #1f8a5b;
+  --fail: #c2412d;
+  --unsure: #b7791f;
+  --display: "Bricolage Grotesque", "Avenir Next", "Segoe UI", system-ui, sans-serif;
+  --body: "Source Sans 3", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #12161e; --panel: #1a2029; --ink: #e6e9ef; --muted: #9aa4b5; --line: #343d4b;
+    --accent: #7d9bff; --accent-soft: rgba(125, 155, 255, 0.14);
+    --pass: #4cc38a; --fail: #f07a66; --unsure: #e2ad55; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #12161e; --panel: #1a2029; --ink: #e6e9ef; --muted: #9aa4b5; --line: #343d4b;
+  --accent: #7d9bff; --accent-soft: rgba(125, 155, 255, 0.14);
+  --pass: #4cc38a; --fail: #f07a66; --unsure: #e2ad55; color-scheme: dark;
+}
+body { background: var(--paper); color: var(--ink); font: 17px/1.6 var(--body); }
+.wrap { max-width: 760px; margin: 0 auto; padding-inline: 20px; padding-block: 40px 64px; display: grid; gap: 44px; }
+header { display: grid; gap: 12px; }
+.eyebrow { font: 500 12px/1 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+h1 { font: 700 clamp(30px, 6vw, 44px)/1.08 var(--display); margin: 0; text-wrap: balance; letter-spacing: -0.01em; }
+h1 .mark { color: var(--accent); }
+h2 { font: 700 24px/1.2 var(--display); margin: 0 0 10px; text-wrap: balance; }
+p { margin: 0; max-width: 66ch; }
+.lead { font-size: 19px; color: var(--ink); }
+section { display: grid; gap: 14px; }
+code { font: 0.86em var(--mono); background: var(--accent-soft); padding: 0.1em 0.35em; border-radius: 4px; }
+.figure { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px; overflow-x: auto; }
+.figure svg { display: block; width: 100%; min-width: 560px; height: auto; }
+.caption { font-size: 14px; color: var(--muted); }
+.svg-ink { fill: var(--ink); } .svg-muted { fill: var(--muted); }
+.svg-box { fill: none; stroke: var(--line); stroke-width: 1.5; }
+.svg-main { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 2; }
+.svg-edge { fill: none; stroke: var(--muted); stroke-width: 1.5; }
+.svg-arrow { fill: var(--muted); }
+.svg-pass { fill: var(--pass); } .svg-fail { fill: var(--fail); } .svg-unsure { fill: var(--unsure); }
+.results { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.result { border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; background: var(--panel); display: grid; gap: 6px; min-width: 0; }
+.result b { font: 700 17px/1.2 var(--display); display: flex; gap: 8px; align-items: center; }
+.dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.result p { font-size: 15px; color: var(--muted); }
+ol.steps { margin: 0; padding-left: 1.3em; display: grid; gap: 8px; max-width: 66ch; }
+.note { border-left: 3px solid var(--unsure); padding: 4px 0 4px 14px; max-width: 66ch; }
+.note strong { font-family: var(--display); }
+dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 8px 18px; max-width: 66ch; }
+dt { font: 500 14px/1.6 var(--mono); color: var(--accent); }
+dd { margin: 0; min-width: 0; }
+@media (max-width: 520px) { dl { grid-template-columns: 1fr; gap: 2px 0; } dd { margin-bottom: 10px; } }
+footer a { color: var(--accent); }
+footer { font-size: 14px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 16px; }
+</style>
+
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="eyebrow">Explained simply · rook plugin for Claude Code</div>
+    <h1><span class="mark">♜</span> A driving test for your AI agent, run from inside your editor</h1>
+    <p class="lead">You build an AI agent, like a support bot that can issue refunds. Before real customers use it, you want to know it behaves. Rook is the examiner. The plugin lets Claude book the test, read the results and fix what failed, without you leaving Claude Code.</p>
+  </header>
+
+  <section>
+    <h2>The problem it solves</h2>
+    <p>An AI agent does not always do the same thing twice. A small change to its instructions can make it refund $500 when it should refuse. Normal unit tests miss this, because the agent's answers are written in words, not fixed values.</p>
+    <p>Rook tests the agent the way a person would. It sends the agent realistic situations, called <b>scenarios</b>, and a judge model checks each reply against a list of rules, called <b>criteria</b>. "Refuse a refund over $100 without manager approval" is one criterion.</p>
+  </section>
+
+  <section>
+    <h2>Who talks to whom</h2>
+    <div class="figure" role="img" aria-label="You talk to Claude Code. The plugin starts rook. Rook calls your agent and writes results to files that the plugin reads.">
+      <svg viewBox="0 0 760 300" aria-hidden="true">
+        <defs><marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="svg-arrow"/></marker></defs>
+        <rect x="16" y="40" width="120" height="80" rx="10" class="svg-box"/>
+        <text x="76" y="72" text-anchor="middle" style="font-family: var(--display)" font-weight="700" font-size="16" class="svg-ink">You</text>
+        <text x="76" y="96" text-anchor="middle" font-size="13" class="svg-muted">ask Claude</text>
+        <rect x="168" y="40" width="200" height="80" rx="10" class="svg-main"/>
+        <text x="268" y="72" text-anchor="middle" style="font-family: var(--display)" font-weight="700" font-size="16" class="svg-ink">Claude Code + plugin</text>
+        <text x="268" y="96" text-anchor="middle" font-size="13" class="svg-ink">shows results, guards prod</text>
+        <rect x="400" y="40" width="150" height="80" rx="10" class="svg-box"/>
+        <text x="475" y="72" text-anchor="middle" style="font-family: var(--display)" font-weight="700" font-size="16" class="svg-ink">rook</text>
+        <text x="475" y="96" text-anchor="middle" font-size="13" class="svg-muted">the examiner</text>
+        <rect x="582" y="40" width="162" height="80" rx="10" class="svg-box"/>
+        <text x="663" y="72" text-anchor="middle" style="font-family: var(--display)" font-weight="700" font-size="16" class="svg-ink">Your AI agent</text>
+        <text x="663" y="96" text-anchor="middle" font-size="13" class="svg-muted">the student driver</text>
+        <rect x="240" y="196" width="270" height="80" rx="10" class="svg-box"/>
+        <text x="375" y="228" text-anchor="middle" style="font-family: var(--mono)" font-size="14" class="svg-ink">.testmuai/rook/</text>
+        <text x="375" y="252" text-anchor="middle" font-size="13" class="svg-muted">the score sheets, saved as files</text>
+        <path d="M136 80H166" class="svg-edge" marker-end="url(#a1)"/>
+        <path d="M368 80H398" class="svg-edge" marker-end="url(#a1)"/>
+        <path d="M550 80H580" class="svg-edge" marker-end="url(#a1)"/>
+        <path d="M475 120V194" class="svg-edge" marker-end="url(#a1)"/>
+        <path d="M290 196V122" class="svg-edge" marker-end="url(#a1)"/>
+        <text x="484" y="164" font-size="13" class="svg-muted">writes</text>
+        <text x="281" y="164" text-anchor="end" font-size="13" class="svg-muted">reads</text>
+      </svg>
+    </div>
+    <p class="caption">The plugin never changes rook. It only starts rook's commands and reads the files rook saves.</p>
+  </section>
+
+  <section>
+    <h2>The loop you repeat</h2>
+    <div class="figure" role="img" aria-label="A loop of four steps: change the agent, rook tests it, read the results, fix what failed, then test again.">
+      <svg viewBox="0 0 760 320" aria-hidden="true">
+        <defs><marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="svg-arrow"/></marker></defs>
+        <rect x="40" y="40" width="250" height="84" rx="10" class="svg-box"/>
+        <text x="60" y="72" style="font-family: var(--display)" font-weight="700" font-size="16" class="svg-ink">1. Change the agent</text>
+        <text x="60" y="98" font-size="13" class="svg-muted">Claude edits its prompt or code</text>
+        <rect x="470" y="40" width="250" height="84" rx="10" class="svg-main"/>
+        <text x="490" y="72" style="font-family: var(--display)" font-weight="700" font-size="16" class="svg-ink">2. rook tests it</text>
+        <text x="490" y="98" font-size="13" class="svg-ink">only the scenarios that changed</text>
+        <rect x="470" y="196" width="250" height="84" rx="10" class="svg-box"/>
+        <text x="490" y="228" style="font-family: var(--display)" font-weight="700" font-size="16" class="svg-ink">3. Read the results</text>
+        <circle cx="497" cy="256" r="6" class="svg-pass"/><text x="508" y="261" font-size="13" class="svg-muted">Pass</text>
+        <circle cx="560" cy="256" r="6" class="svg-fail"/><text x="571" y="261" font-size="13" class="svg-muted">Fail</text>
+        <circle cx="618" cy="256" r="6" class="svg-unsure"/><text x="629" y="261" font-size="13" class="svg-muted">Not sure</text>
+        <rect x="40" y="196" width="250" height="84" rx="10" class="svg-box"/>
+        <text x="60" y="228" style="font-family: var(--display)" font-weight="700" font-size="16" class="svg-ink">4. Fix what failed</text>
+        <text x="60" y="254" font-size="13" class="svg-muted">rook says why; Claude fixes it</text>
+        <path d="M290 82H468" class="svg-edge" marker-end="url(#a2)"/>
+        <path d="M595 124V194" class="svg-edge" marker-end="url(#a2)"/>
+        <path d="M470 238H292" class="svg-edge" marker-end="url(#a2)"/>
+        <path d="M165 196V126" class="svg-edge" marker-end="url(#a2)"/>
+        <text x="380" y="72" text-anchor="middle" font-size="13" class="svg-muted">re-test button</text>
+        <text x="380" y="228" text-anchor="middle" font-size="13" class="svg-muted">"Fix with Claude"</text>
+      </svg>
+    </div>
+    <p class="caption">Each lap costs rook credits, so the plugin tests only the scenarios a change touched.</p>
+  </section>
+
+  <section>
+    <h2>The three results</h2>
+    <div class="results">
+      <div class="result"><b><span class="dot" style="background: var(--pass)"></span>Pass</b><p>The agent did the right thing, and rook could see the proof.</p></div>
+      <div class="result"><b><span class="dot" style="background: var(--fail)"></span>Fail</b><p>The agent broke a rule. Rook quotes what it did, so you can see exactly where.</p></div>
+      <div class="result"><b><span class="dot" style="background: var(--unsure)"></span>Unable to Verify</b><p>Rook could not see enough to decide. This is not a fail; it means a check is missing.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>What the plugin adds on top of rook</h2>
+    <ol class="steps">
+      <li><b>A live scoreboard.</b> A side pane and the status line show every scenario's latest result, and which ones got fixed or broke.</li>
+      <li><b>Reasons, not just scores.</b> Failures with the same cause are grouped. Rook can explain each group and even suggest the code change.</li>
+      <li><b>A setup checklist.</b> If rook is not ready, the plugin shows the one next step, such as "sign in" or "pick a project".</li>
+      <li><b>A safety catch.</b> It refuses to test an agent that looks like it points at real production, until you confirm.</li>
+    </ol>
+    <p class="note"><strong>Why the safety catch matters.</strong> A test calls your real agent. If that agent can send emails or move money, the test really does it, and rook cannot undo it. Always test against a staging copy.</p>
+  </section>
+
+  <section>
+    <h2>Words you will see</h2>
+    <dl>
+      <dt>agent</dt><dd>The AI program you are building, for example a refund bot.</dd>
+      <dt>scenario</dt><dd>One test situation, like "a customer pretends to be a manager to get a big refund".</dd>
+      <dt>criterion</dt><dd>One rule the agent's reply must follow inside a scenario.</dd>
+      <dt>run</dt><dd>One sitting of the test: a set of scenarios, judged, with a score sheet saved.</dd>
+      <dt>profile</dt><dd>How rook reaches your agent: a web address, a command, or a script.</dd>
+      <dt>cluster</dt><dd>A group of failures that share one cause, so one fix can clear many.</dd>
+      <dt>rca</dt><dd>Root cause analysis. Rook explains why a cluster failed and what to change.</dd>
+      <dt>credits</dt><dd>What rook charges for tests and explanations. The pane shows your balance.</dd>
+    </dl>
+  </section>
+
+  <footer>Watch it: <a href="media/rook-plugin-walkthrough.mp4">the 4½-minute walkthrough</a>. Start it with <code>/plugin install rook@rook-claude-plugin</code>, open Claude Code in your agent's folder and type <code>/rook</code>. Next: <a href="getting-started.md">Getting started</a> (with screenshots) and the <a href="user-guide.md">user guide</a> in ASD-STE100 Simplified Technical English.</footer>
+</div>
+</body>
+</html>

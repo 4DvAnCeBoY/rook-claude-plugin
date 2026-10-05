@@ -2,7 +2,20 @@
 
 **Claude builds your agent. rook tests it. Same terminal.**
 
-A Claude Code plugin for [rook](https://github.com/LambdaTest/rook), TestMu AI's agent-assurance CLI. While Claude writes or changes your AI agent, this plugin lets Claude run rook's scenarios against it, read the verdicts and the evidence, and fix what failed. You watch the results in a live pane.
+A Claude Code plugin for [rook](https://github.com/LambdaTest/rook), TestMu AI's agent-assurance CLI. While Claude writes or changes your AI agent, this plugin lets Claude set rook up, run rook's scenarios against the agent, read the verdicts and the evidence, and fix what failed. You watch the results in a live pane.
+
+[![Watch the walkthrough: project, explore, generate, profile, run and fix in one Claude Code session](docs/media/walkthrough-poster.png)](docs/media/rook-plugin-walkthrough.mp4)
+
+*▶ [Watch the 4½-minute walkthrough](docs/media/rook-plugin-walkthrough.mp4): a real session against a demo banking agent, from an empty repository to a fix with a re-test prompt.*
+
+## Start here
+
+| Your repository | What happens | Guide |
+|---|---|---|
+| **Has no rook tests yet** (no `.testmuai/rook/`) | Type `/rook` for a setup checklist, or ask Claude to *"set rook up for this repo"*. Claude creates the project, explores the code and writes scenarios; you add the profile with one `!` command; then Claude runs and fixes. | [Case A](docs/getting-started.md#case-a-a-repository-with-no-rook-tests-yet) |
+| **Already has rook tests** | Open Claude Code there. The pane reads every scenario and run already on disk (nothing is re-run), shows each scenario's newest verdict, and Claude can read, explain and re-test from history. | [Case B](docs/getting-started.md#case-b-a-repository-that-already-has-rook-tests) |
+
+More: [Getting started](docs/getting-started.md) (with screenshots) · [User guide](docs/user-guide.md) (ASD-STE100) · [Explainer](docs/explainer.html) (plain words, diagrams) · [How the plugin reads rook](plugins/rook/README.md)
 
 ```
 ┌ rook · commercecare · profile commerce-hooks ────────────┐
@@ -31,15 +44,16 @@ A Claude Code plugin for [rook](https://github.com/LambdaTest/rook), TestMu AI's
 
 ## Features
 
-1. **Claude runs rook.** Claude gets five tools: `run`, `report`, `status`, `scenarios` and `generate`. After changing your agent's prompt, tools or code, Claude picks the scenarios it touched (`scenarios` lists them with their latest verdicts) and re-tests them. It gets back Pass / Fail / Unable to Verify for each one, with failures **grouped into rook's root-cause clusters**. With `rca`, each cluster carries rook's cause, whose fault it is (agent, scenario or harness), the files to open and **the proposed diff** from `remedies/CL-xx.md`. It also gets each failing criterion with expected vs achieved and quoted evidence, rook's narrative and its next steps.
+1. **Claude runs rook.** Claude gets eleven tools: `run`, `report`, `status`, `scenarios`, `runs`, `curate`, `generate` and `agent`, plus the setup tools `project`, `explore` and `profile_test`. After changing your agent's prompt, tools or code, Claude picks the scenarios it touched (`scenarios` lists them with their latest verdicts) and re-tests them. It gets back Pass / Fail / Unable to Verify for each one, with failures **grouped into rook's root-cause clusters**. With `rca`, each cluster carries rook's cause, whose fault it is (agent, scenario or harness), the files to open and **the proposed diff** from `remedies/CL-xx.md`. It also gets each failing criterion with expected vs achieved and quoted evidence, rook's narrative and its next steps.
 2. **Live verdict pane.** Shows every scenario's **latest verdict across runs**, so a two-scenario re-test doesn't stand in for the whole agent. While a run is going, each scenario gets a lane with its phase and elapsed time. After a run you get the clusters, failed scenarios you can **open to their criteria and evidence** and hand to Claude one at a time, *what nobody looked at* in plain words, and rook's next steps. **Evidence viewer** starts `rook ui --local` and links to it.
 3. **Progress where you're looking.** While Claude waits on a run, the turn's spinner shows `rook 3/8 · SC-004 execute · 1m12s`, at any terminal width.
 4. **Re-test prompt.** When Claude edits a file your agent is built from, a bar above the prompt names the scenarios that file affects and estimates the cost at the last run's rate. It has a **Re-test** button.
 5. **Failures as context.** When a run you started in another terminal finishes with failures, Claude receives the clusters and the failing evidence automatically.
 6. **Status line score.** For example `rook ✓41 ✗2 ?3 · 2 gaps · ↑1 fixed ↓1 regressed`, or `rook ▸ 12/48 · SC-013 judging` while a run is in progress. Fixed and regressed are counted per scenario against that scenario's previous verdict, never between runs of different scope.
 7. **Run history.** `/rook runs` and the `runs` tool list every run on disk; agent health looks as far back as it needs to; scenarios added outside the session show up on the next poll.
-8. **`/rook` commands.** `pane`, `status`, `scenarios`, `report`, `explain`, `run`, `generate`, `ui`, `confirm-prod` and `help`.
-9. **Production guard.** Blocks rook runs against a target that looks like production, including a profile named in the run, until **you** type `/rook confirm-prod`. Your agent's writes are real, and rook cannot undo them.
+8. **Setup from inside Claude Code.** In a repository with no rook workspace, `/rook` shows a six-step checklist (installed, signed in, project, agent, scenarios, profile) with the one next action, also in the status line. Claude can create the project, explore the code, write scenarios and test the profile. Adding the profile stays yours, because only you have the connection details.
+9. **`/rook` commands.** `pane`, `status`, `scenarios`, `runs`, `report`, `explain`, `run`, `generate`, `explore`, `project`, `agent`, `profile`, `ui`, `confirm-prod` and `help`.
+10. **Production guard.** Blocks rook runs against a target that looks like production, including a profile named in the run, until **you** type `/rook confirm-prod`. Your agent's writes are real, and rook cannot undo them.
 
 ## Requirements
 
@@ -50,8 +64,8 @@ A Claude Code plugin for [rook](https://github.com/LambdaTest/rook), TestMu AI's
   # or: npm install -g @testmuai/rook
   # or: curl -fsSL https://raw.githubusercontent.com/LambdaTest/rook/main/install.sh | bash
   ```
-- **A rook workspace** in your agent's repository: run `rook login`, then `rook explore .`, `rook generate` and `rook profile add`. See [rook's five-minute guide](https://github.com/LambdaTest/rook#five-minutes).
-  Or do it from inside Claude Code: ask Claude to set rook up (its `project`, `explore` and `profile_test` tools), or use `/rook project`, `/rook explore` and `/rook profile`. Adding a profile stays yours: `! rook profile add <name> --from connection.md`.
+- **Signed in to rook:** `rook login` (add `--oauth` if no browser opens).
+- **No rook workspace needed up front.** The plugin walks you through it ([Case A](docs/getting-started.md#case-a-a-repository-with-no-rook-tests-yet)). If you prefer the terminal: `rook explore .`, `rook generate` and `rook profile add`, as in [rook's five-minute guide](https://github.com/LambdaTest/rook#five-minutes).
 
 ## Install
 
@@ -84,7 +98,7 @@ To load it in every session without the flag, add this to `~/.claude/settings.js
 
 ## How to use it
 
-Start Claude Code **in your agent's repository**, the folder that contains `.testmuai/rook/`. The plugin reads rook's files from the directory the session starts in, the same way rook does.
+Start Claude Code **in your agent's repository**, the folder that contains (or will contain) `.testmuai/rook/`. The plugin reads rook's files from the directory the session starts in, the same way rook does.
 
 | You want to… | Do this |
 |---|---|
