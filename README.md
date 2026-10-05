@@ -156,6 +156,8 @@ claude plugin test .       # logic, pane and bar on terminal and desktop, tools,
 
 See [`plugins/rook/README.md`](plugins/rook/README.md) for how the plugin reads rook's files and what the production guard checks.
 
+**Where changes go.** Open pull requests against [`4DvAnCeBoY/rook-claude-plugin`](https://github.com/4DvAnCeBoY/rook-claude-plugin). [`LambdaTest/rook-claude-plugin`](https://github.com/LambdaTest/rook-claude-plugin), the repository the Claude plugin directory follows, pulls its `main` every 30 minutes (`.github/workflows/sync-upstream.yml`); run that workflow by hand to sync at once. Raise `version` in `plugin.json` with every release.
+
 ## License
 
 Apache-2.0, like rook. rook and TestMu AI are trademarks of their owners; this plugin is an independent integration.
