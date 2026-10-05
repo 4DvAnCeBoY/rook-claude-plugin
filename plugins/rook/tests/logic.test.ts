@@ -560,6 +560,22 @@ describe('format', () => {
     expect(text).toContain('  ? no ledger read')
   })
 
+  test('generate result from the prose an older rook prints for --json', () => {
+    const stdout = [
+      '7 scenario(s) written, 0 already current, 1 the plan left alone, 553.12 credits',
+      'F-003: two boundary scenarios around the USD 1000 approval limit',
+      'on disk only — nothing has been recorded upstream',
+      '  next:  rook sync        record this project upstream',
+    ].join('\n')
+    const text = generateText(undefined, stdout)
+
+    expect(text).toContain('rook generate: 7 scenario files written, 1 feature the plan left alone · 553.12 credits.')
+    expect(text).toContain('  F-003: two boundary scenarios')
+    expect(text).not.toContain('rook sync')
+    expect(text).toContain('rook run tool')
+    expect(generateText(undefined, '0 scenario(s) written, 7 already current, 0.40 credits')).toContain('0 scenario files written, 7 features already covered')
+  })
+
   test('progress bar and status text', () => {
     expect(progressBar(1, 4, 8)).toBe('██░░░░░░')
     expect(progressBar(0, 0, 4)).toBe('░░░░')
