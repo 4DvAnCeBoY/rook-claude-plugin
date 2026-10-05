@@ -1,6 +1,6 @@
 # rook plugin for Claude Code — User Guide
 
-Written in ASD-STE100 Simplified Technical English. For a guided tour with screenshots, read [Getting started](getting-started.md). For a plain-words overview, open [the explainer](explainer.html).
+For a guided tour with screenshots, read [Getting started](getting-started.md). For a plain-words overview, open [the explainer](explainer.html).
 
 ## Purpose
 
