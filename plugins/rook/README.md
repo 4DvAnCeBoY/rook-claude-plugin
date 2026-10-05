@@ -72,6 +72,8 @@ The mod holds no prompts and no model keys. It passes rook only validated flags:
 
 A free-text instruction goes after `--`. Anything else is refused before `argv` is built.
 
+**Profile tests and state.** `rook profile test` does not give a profile's scripts the state directory a run does, so a profile that keeps its session in `ROOK_STATE_DIR` fails it with "ROOK_STATE_DIR is required". The mod sets a fresh `ROOK_STATE_DIR` / `ROOK_RUN_STATE_DIR` under the system temp directory for each profile test it starts. rook passes its own environment to the scripts and sets these itself during a run, so runs keep their per-scenario directories.
+
 ## What the production guard reads, and what it does not
 
 It reads the active profile's `target.endpoint`, `domain`, `command`, `server`, `url` and `base_url`, plus `hook_env`. It also reads the values of the variables the profile declares under `env`, taken from rook's own store (`~/.testmuai/rook/env.json`, written by `rook env set`).

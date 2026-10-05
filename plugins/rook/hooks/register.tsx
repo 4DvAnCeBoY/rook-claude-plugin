@@ -220,8 +220,8 @@ async function rookJson($: EngineInterface, ctx: Ctx, args: string[]): Promise<C
  * A run can outlast `process.run`'s ten-minute ceiling, so it is streamed: the
  * child lives as long as the loop reading it, and `signal` ends both.
  */
-async function rookRun($: EngineInterface, ctx: Ctx, argv: string[], signal?: AbortSignal): Promise<CliResult> {
-  const stream = $.process.spawn({ argv: [ctx.bin, ...argv], env: CLI_ENV, input: '', ...(ctx.cwd !== '' && { cwd: ctx.cwd }) })
+async function rookRun($: EngineInterface, ctx: Ctx, argv: string[], signal?: AbortSignal, env: Record<string, string> = {}): Promise<CliResult> {
+  const stream = $.process.spawn({ argv: [ctx.bin, ...argv], env: { ...CLI_ENV, ...env }, input: '', ...(ctx.cwd !== '' && { cwd: ctx.cwd }) })
   const iterator = stream[Symbol.asyncIterator]()
   let stdout = ''
   let stderr = ''
@@ -1253,6 +1253,21 @@ async function exploreRun($: EngineInterface, ctx: Ctx, request: ExploreRequest,
 }
 
 /**
+ * State directories for a profile test. `rook profile test` hands the scripts
+ * none (a run does), so a profile that keeps its session in ROOK_STATE_DIR
+ * failed with "ROOK_STATE_DIR is required" before reaching the agent. rook
+ * passes its own environment to the scripts and sets these only when it has
+ * one, so a run still uses its own per-scenario directory. A fresh pair per
+ * test, under the system temp directory: no session carries from one test to
+ * the next, and nothing collects in the repository.
+ */
+async function probeStateEnv($: EngineInterface): Promise<Record<string, string>> {
+  const base = `${((await $.env.get('TMPDIR')) ?? '/tmp').replace(/\/$/, '')}/rook-profile-test-${await $.clock.now()}`
+
+  return { ROOK_STATE_DIR: `${base}/state`, ROOK_RUN_STATE_DIR: `${base}/run-state` }
+}
+
+/**
  * `rook profile` (list), `profile use <id>`, `profile test [id]`. A test calls
  * the real agent through the profile, so the production guard applies to the
  * profile being tested.
@@ -1286,7 +1301,7 @@ async function profileReply($: EngineInterface, ctx: Ctx, request: ProfileReques
   }
 
   try {
-    const result = await rookRun($, ctx, args.argv, signal)
+    const result = await rookRun($, ctx, args.argv, signal, await probeStateEnv($))
 
     return { result: profileTestText(request.profile, result.exitCode, result.stdout ?? '', result.stderr) }
   } finally {

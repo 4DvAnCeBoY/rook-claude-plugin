@@ -18,6 +18,8 @@ export type World = {
   tools: string[]
   /** argv of every rook invocation */
   invocations: string[][]
+  /** The environment each spawned rook was given, beside its argv. */
+  spawnEnvs: Record<string, string>[]
   /** What the fake `rook run` does: write files, then print this document. */
   onRun: (argv: readonly string[]) => { stdout: string; code: number; stderr?: string; writes?: Record<string, string> }
   status: { stdout: string; code: number }
@@ -54,6 +56,7 @@ export function worldOf(on: On, files: Readonly<Record<string, string>>, env: Re
     commands: [],
     tools: [],
     invocations: [],
+    spawnEnvs: [],
     onRun: () => ({ stdout: JSON.stringify({ ok: true, halted: false, credits: 0 }), code: 0 }),
     status: { stdout: JSON.stringify({ project_id: 'P', offline: false, agents: [] }), code: 0 },
     answer: () => undefined,
@@ -127,6 +130,7 @@ export function worldOf(on: On, files: Readonly<Record<string, string>>, env: Re
 
   on('process.spawn', async function* ($, e) {
     world.invocations.push([...e.argv])
+    world.spawnEnvs.push({ ...((e as { env?: Record<string, string> }).env ?? {}) })
     const ran = world.onRun(e.argv)
 
     for (const [path, text] of Object.entries(ran.writes ?? {})) {

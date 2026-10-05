@@ -1171,3 +1171,25 @@ describe('runs in another project folder', () => {
     expect((await ui.find({ key: 'elsewhere' }))?.text).toContain('2 runs in shop--01M0EXAMP1EPR0JECT0000000A on disk: rook reads only the selected project.')
   })
 })
+
+describe('profile test state directories', () => {
+  test('a profile test gets a fresh ROOK_STATE_DIR pair under the temp directory; a run does not', async ($, on) => {
+    const { world, clock } = await start($, on, workspace(), { HOME, TMPDIR: '/var/tmp/' })
+
+    world.onRun = () => ({ code: 0, stdout: 'commerce-http: answered in 120ms — verified\n\nHello!\n' })
+    const ran = asText((await $.tool.call({ tool: 'mcp__rook__profile_test', action: 'test' } as never)) as Ran)
+    const env = world.spawnEnvs.at(-1)!
+
+    expect(ran).toContain('the agent answered')
+    expect(env.ROOK_STATE_DIR).toMatch(/^\/var\/tmp\/rook-profile-test-\d+\/state$/)
+    expect(env.ROOK_RUN_STATE_DIR).toBe(env.ROOK_STATE_DIR!.replace(/state$/, 'run-state'))
+
+    await clock.advance(5)
+    await $.tool.call({ tool: 'mcp__rook__profile_test', action: 'test' } as never)
+    expect(world.spawnEnvs.at(-1)!.ROOK_STATE_DIR).not.toBe(env.ROOK_STATE_DIR) // a fresh pair each time
+
+    freshRun(world, { 'SC-002': VERDICT_PASS_GAP }, [1, 0, 0])
+    await $.tool.call({ tool: 'mcp__rook__run', only: ['SC-002'] } as never)
+    expect(world.spawnEnvs.at(-1)!.ROOK_STATE_DIR).toBeUndefined() // a run gets rook's own per-scenario directory
+  })
+})
