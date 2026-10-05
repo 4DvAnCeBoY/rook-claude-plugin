@@ -281,10 +281,10 @@ describe('guard', () => {
     expect(byProfile.isRisky).toBe(true)
     expect(byProfile.reasons).toEqual(['profile target.endpoint mentions "prod"'])
 
-    const byVariable = assess(PROFILE_STAGING, { DEMO_API_TOKEN: 'sk-live-abc123' }, 'prod,production,live')
+    const byVariable = assess(PROFILE_STAGING, { DEMO_API_TOKEN: 'fake-live-value' }, 'prod,production,live')
 
     expect(byVariable.reasons).toEqual(['DEMO_API_TOKEN mentions "live"'])
-    expect(byVariable.reasons.join(' ')).not.toContain('sk-live-abc123')
+    expect(byVariable.reasons.join(' ')).not.toContain('fake-live-value')
   })
 
   test('markers match whole words only, and localhost is never production', () => {
