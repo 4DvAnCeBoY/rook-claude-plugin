@@ -28,6 +28,8 @@ import { ScenariosTab } from './views/scenarios'
 // ── end imports: band
 
 // ── imports: status line
+import { composeStatus, trendOf } from './statusline'
+import type { TrendPoint } from './statusline'
 // ── end imports: status line
 
 // ── imports: card
@@ -67,7 +69,6 @@ import {
   scenariosText,
   spinnerText,
   staleLine,
-  statusLine,
   statusText,
   unlooked,
 } from './format'
@@ -256,6 +257,8 @@ type Ctx = {
   rows: RowCache
   /** Installed and signed in, as the CLI last said: probed at start and when they block, not every poll. */
   cli: CliFacts
+  /** The status line's recent finished runs, re-read only when the runs on disk change. */
+  statusTrend?: { key: string; points: TrendPoint[] }
 }
 
 function textOption(value: unknown, fallback: string): string {
@@ -341,12 +344,21 @@ async function showStatus($: EngineInterface, ctx: Ctx): Promise<void> {
   }
 
   const snapshot = await read($, snapshotAtom)
-  const running = await read($, runningAtom)
 
   // A workspace that cannot run yet says which step is missing; outside one, nothing.
-  const line = [statusLine(snapshot, running !== null), setupLine(snapshot?.readiness)].filter(Boolean).join(' · ')
+  const line = composeStatus({
+    snapshot,
+    running: await read($, runningAtom),
+    stale: await read($, staleAtom),
+    balance: await read($, balanceAtom),
+    budget: await read($, budgetAtom),
+    job: await read($, jobAtom),
+    trend: await statusTrend($, ctx, snapshot),
+    setup: setupLine(snapshot?.readiness),
+    now: await $.clock.now(),
+  })
 
-  $.ui.status(line === '' ? undefined : line)
+  $.ui.status(line)
 }
 
 // ── readiness ────────────────────────────────────────────────────────────────
@@ -1011,6 +1023,7 @@ async function noted($: EngineInterface, ctx: Ctx, path: string): Promise<void> 
 
   await update($, staleAtom, () => ({ files, scenarios: impact.scenarios, isWholeAgent: impact.isWholeAgent, ...(estimate !== undefined && { estimate }), since }))
   await update($, bandHiddenAtom, () => false)
+  await showStatus($, ctx)
 }
 
 async function fixWithClaude($: EngineInterface, ctx: Ctx, run: RookRunView): Promise<void> {
@@ -1419,6 +1432,7 @@ async function refreshBalance($: EngineInterface, ctx: Ctx): Promise<number | nu
 
   if ((await read($, balanceAtom)) !== balance) {
     await update($, balanceAtom, () => balance)
+    await showStatus($, ctx)
   }
 
   return balance
@@ -1738,6 +1752,25 @@ async function syncReply($: EngineInterface, ctx: Ctx): Promise<string> {
 // ══ end feature: band ════════════════════════════════════════════════════════
 
 // ══ feature: status line ═════════════════════════════════════════════════════
+
+/** The trend and ETA's recent finished runs, cached in ctx until the runs on disk change. */
+async function statusTrend($: EngineInterface, ctx: Ctx, snapshot: RookSnapshot | null): Promise<TrendPoint[]> {
+  const loc = ctx.located
+
+  if (snapshot === null || loc === undefined || snapshot.agentId !== loc.agentId) {
+    return []
+  }
+
+  const key = `${loc.agentDir}#${snapshot.runCount ?? 0}#${snapshot.latest?.runId ?? ''}#${snapshot.latest?.finished === true}`
+
+  if (ctx.statusTrend?.key !== key) {
+    const io = ioOf($, ctx)
+
+    ctx.statusTrend = { key, points: await trendOf(io, loc.agentDir, await runIds(io, loc.agentDir)) }
+  }
+
+  return ctx.statusTrend.points
+}
 // ══ end feature: status line ═════════════════════════════════════════════════
 
 // ══ feature: card (transcript verdict card) ══════════════════════════════════
