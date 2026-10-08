@@ -32,6 +32,9 @@ import type { RookStatus } from '../types'
 // ── end imports: scenarios tab
 
 // ── imports: setup tab
+import { budgetRefusal, budgetText, CONNECTION_FILES, GENERATE_ESTIMATE, parseBudget, profileView, spentOf, syncArgs, syncStateOf, syncStateText, syncText, verifiedProfiles, wizardOf } from './setup'
+import type { SyncState } from './setup'
+import type { SetupPanel } from './views/setup'
 // ── end imports: setup tab
 
 // ── imports: band
@@ -191,6 +194,7 @@ const scenarioDetailAtom = atom({ plugin: 'rook', key: 'scenarioDetail' } as con
 
 // ── atoms: setup tab
 const budgetAtom = atom({ plugin: 'rook', key: 'budget' } as const, null)
+const syncAtom = atom({ plugin: 'rook', key: 'sync' } as const, null)
 // ── end atoms: setup tab
 
 // ── atoms: band
@@ -223,6 +227,7 @@ const CURATE_TOOL = /^mcp__rook__curate$/
 const COMPARE_TOOL = /^mcp__rook__compare$/
 // ── end tool patterns: runs tab
 // ── tool patterns: setup tab
+const SYNC_TOOL = /^mcp__rook__sync$/
 // ── end tool patterns: setup tab
 // ── tool patterns: ci
 const CI_TOOL = /^mcp__rook__ci$/
@@ -726,7 +731,7 @@ async function startRun($: EngineInterface, ctx: Ctx, request: RunRequest, sourc
     return `rook: ${unready}`
   }
 
-  const blocked = (await prodBlock($, ctx, request.profile)) ?? (await budgetBlock($, ctx, 'run'))
+  const blocked = (await prodBlock($, ctx, request.profile)) ?? (await budgetBlock($, ctx, 'run', request.only?.length))
 
   if (blocked !== undefined) {
     return blocked
@@ -765,7 +770,7 @@ async function toolRun($: EngineInterface, ctx: Ctx, request: RunRequest, signal
     return { deny: `rook ${unready}` }
   }
 
-  const blocked = (await prodBlock($, ctx, request.profile)) ?? (await budgetBlock($, ctx, 'run'))
+  const blocked = (await prodBlock($, ctx, request.profile)) ?? (await budgetBlock($, ctx, 'run', request.only?.length))
 
   if (blocked !== undefined) {
     return { deny: blocked }
@@ -1727,6 +1732,8 @@ async function confirmNow($: EngineInterface, ctx: Ctx): Promise<void> {
     $.clock.after(0, () => backgroundGenerate($, ctx, request))
   } else if (confirm?.action === 'flaky') {
     $.ui.toast(await flakyStart($, ctx, confirm.id, confirm.times, 'pane'))
+  } else if (confirm?.action === 'profile-test') {
+    await paneProfileTest($, ctx, confirm.profile)
   }
 }
 
@@ -2195,30 +2202,238 @@ async function flakyReply($: EngineInterface, ctx: Ctx, args: string[]): Promise
 
 // ══ feature: setup tab (profile wizard, sync, budget) ════════════════════════
 
-/** Refuses a run or generate that the session's credit budget would not cover; undefined when allowed. */
-async function budgetBlock($: EngineInterface, ctx: Ctx, kind: 'run' | 'generate'): Promise<string | undefined> {
-  void $
-  void ctx
-  void kind
+/**
+ * Refuses a run or generate that the session's credit budget would not cover;
+ * undefined when allowed. Spent is the balance when the budget was set minus
+ * the balance now (`rook plan`), so it counts spending from a terminal too.
+ * A run's estimate is the latest run's credits per scenario times `count`
+ * (the scenarios asked for, or every scenario), else the latest run's credits.
+ */
+async function budgetBlock($: EngineInterface, ctx: Ctx, kind: 'run' | 'generate', count?: number): Promise<string | undefined> {
+  const budget = await read($, budgetAtom)
 
-  return undefined
+  if (budget === null) {
+    return undefined
+  }
+
+  const spent = spentOf(budget, await refreshBalance($, ctx))
+
+  if (spent !== budget.spent) {
+    await update($, budgetAtom, now => (now === null ? null : { ...now, spent }))
+  }
+
+  const latest = (await read($, snapshotAtom))?.latest
+  const rate = creditsPerScenario(latest)
+  const planned = count ?? ctx.agentIndex?.scenarios.length ?? latest?.planned
+  const estimate =
+    kind === 'generate' ? GENERATE_ESTIMATE : rate !== undefined && planned !== undefined && planned > 0 ? rate * planned : latest?.finished ? latest.credits : undefined
+
+  return budgetRefusal({ ...budget, spent }, kind, estimate)
 }
 
-/** `/rook budget [N|off]`. */
+/** `/rook budget <credits>|off|status`. */
 async function budgetReply($: EngineInterface, ctx: Ctx, args: string[]): Promise<string> {
-  void $
-  void ctx
-  void args
+  const parsed = parseBudget(args)
 
-  return 'rook: budgets are not built yet.'
+  if (typeof parsed === 'object' && parsed !== null) {
+    return `rook: ${parsed.error}`
+  }
+
+  if (parsed === null) {
+    await update($, budgetAtom, () => null)
+
+    return 'rook: budget off. Runs and generates are limited only by the credit balance.'
+  }
+
+  const balance = await refreshBalance($, ctx)
+  const before = await read($, budgetAtom)
+
+  if (parsed === undefined) {
+    if (before === null) {
+      return `rook: ${budgetText(null, balance)}`
+    }
+
+    const spent = spentOf(before, balance)
+    await update($, budgetAtom, now => (now === null ? null : { ...now, spent }))
+
+    return `rook: ${budgetText({ ...before, spent }, balance)}`
+  }
+
+  // A raise keeps counting from when the budget was first set.
+  const startBalance = before?.startBalance ?? (balance === null ? undefined : balance)
+  const next = { limit: parsed, spent: 0, ...(startBalance !== undefined && { startBalance }) }
+  const budget = { ...next, spent: spentOf(next, balance) }
+
+  await update($, budgetAtom, () => budget)
+
+  return `rook: ${budgetText(budget, balance)}. Runs and generates that would go past it are refused.`
 }
 
-/** `/rook sync`: record this project upstream (rook sync). */
-async function syncReply($: EngineInterface, ctx: Ctx): Promise<string> {
-  void $
-  void ctx
+/** `rook status --json` as the Setup tab's sync state, or why it could not be read. */
+async function syncStatus($: EngineInterface, ctx: Ctx): Promise<SyncState | { failed: string }> {
+  const status = await rookJson($, ctx, ['status', '--json'])
+  const problem = failureOf(status)
 
-  return 'rook: sync is not built yet.'
+  return status.doc === undefined || problem !== undefined ? { failed: `rook status failed: ${problem ?? 'no output'}` } : syncStateOf(status.doc, await $.clock.now())
+}
+
+/** "Check sync state": `rook status --json`, no credits. */
+async function checkSync($: EngineInterface, ctx: Ctx): Promise<string> {
+  const blocked = await setupBlock($, ctx, NEEDS.status, 'read sync state')
+
+  if (blocked !== undefined) {
+    await update($, syncAtom, now => ({ checkedAt: now?.checkedAt ?? 0, offline: now?.offline ?? false, agents: now?.agents ?? [], error: blocked }))
+
+    return `rook: ${blocked}`
+  }
+
+  const state = await syncStatus($, ctx)
+
+  if ('failed' in state) {
+    await update($, syncAtom, now => ({ checkedAt: now?.checkedAt ?? 0, offline: now?.offline ?? false, agents: now?.agents ?? [], error: state.failed }))
+
+    return state.failed
+  }
+
+  await update($, syncAtom, () => state)
+
+  return syncStateText(state)
+}
+
+/**
+ * `/rook sync`, the pane's Sync upstream and the sync tool: `rook sync`
+ * records the project (every agent, or `agent`) upstream as one write, then
+ * `rook status --json` says where it stands. No credits: rook sends what is on
+ * disk to rook-api and calls no model and not the agent.
+ */
+async function syncReply($: EngineInterface, ctx: Ctx, agent?: string): Promise<string> {
+  const args = syncArgs(agent)
+
+  if ('error' in args) {
+    return `rook: ${args.error}`
+  }
+
+  const blocked = await setupBlock($, ctx, NEEDS.profileTest, 'sync')
+
+  if (blocked !== undefined) {
+    return `rook: ${blocked}`
+  }
+
+  const before = await read($, syncAtom)
+
+  if (before?.isSyncing === true) {
+    return 'rook: a sync is already in progress.'
+  }
+
+  await update($, syncAtom, now => ({ checkedAt: now?.checkedAt ?? 0, offline: now?.offline ?? false, agents: now?.agents ?? [], isSyncing: true }))
+
+  let text: string
+  let isFailed = false
+
+  try {
+    const result = await rookRun($, ctx, args.argv)
+
+    isFailed = result.exitCode !== 0
+    text = syncText(result.exitCode, result.stdout ?? '', result.stderr)
+
+    if (isFailed) {
+      text = await explained($, ctx, result, text, NEEDS.profileTest, 'sync')
+    }
+  } catch (error) {
+    isFailed = true
+    text = `rook sync failed: could not start ${ctx.bin} — ${clip(String(error), 120)}`
+  }
+
+  const state = await syncStatus($, ctx)
+  const head = text.split('\n')[0] ?? ''
+
+  await update($, syncAtom, now => ({
+    ...('failed' in state ? { checkedAt: now?.checkedAt ?? 0, offline: now?.offline ?? false, agents: now?.agents ?? [] } : state),
+    ...(isFailed ? { error: head } : { said: head }),
+  }))
+  ctx.isDirty = true
+  await poll($, ctx)
+
+  return 'failed' in state ? `${text}\n${state.failed}` : `${text}\n${syncStateText(state)}`
+}
+
+async function paneSync($: EngineInterface, ctx: Ctx): Promise<void> {
+  $.ui.toast(clip(await syncReply($, ctx), 300))
+}
+
+async function paneCheckSync($: EngineInterface, ctx: Ctx): Promise<void> {
+  await checkSync($, ctx)
+}
+
+async function paneUseProfile($: EngineInterface, ctx: Ctx, id: string): Promise<void> {
+  const answer = await profileReply($, ctx, { action: 'use', profile: id })
+
+  $.ui.toast(clip('deny' in answer ? answer.deny : answer.result, 200))
+}
+
+/** The Setup tab's Test: one call to the agent spends credits, so it waits behind the Confirm bar. */
+async function askProfileTest($: EngineInterface, id: string): Promise<void> {
+  await askConfirm($, { action: 'profile-test', profile: id, label: `Test profile ${id}: one call to your agent` })
+}
+
+/** The confirmed profile test, in the background like `/rook profile test`. Called from confirmNow. */
+async function paneProfileTest($: EngineInterface, ctx: Ctx, profile: string | undefined): Promise<void> {
+  const request: ProfileRequest = { action: 'test', ...(profile !== undefined && { profile }) }
+
+  $.ui.toast(`rook: testing ${profile ?? 'the active profile'}: one call to the agent. A toast says what came back.`)
+  $.clock.after(0, async () => {
+    const answer = await profileReply($, ctx, request).catch(error => ({ deny: `rook profile test failed: ${String(error)}` }))
+
+    $.ui.toast(clip('deny' in answer ? answer.deny : answer.result, 300))
+  })
+}
+
+/**
+ * What the Setup tab shows past the checklist, read from disk while drawing:
+ * the active agent's profiles, which are verified (`state.json`), which of
+ * their variables rook's env store has (names only), and a connection file in
+ * the repository root for the wizard.
+ */
+async function setupPanel($: EngineInterface, ctx: Ctx, canAct: boolean): Promise<SetupPanel | undefined> {
+  const loc = ctx.located ?? (await where($, ctx))
+
+  if (loc === undefined) {
+    return undefined
+  }
+
+  const io = ioOf($, ctx)
+  const ids = (await io.list(`${loc.agentDir}/profiles`))
+    .filter(entry => entry.kind === 'file' && entry.name.endsWith('.yaml'))
+    .map(entry => entry.name.replace(/\.yaml$/, ''))
+    .filter(id => /^[\w.][\w.-]{0,63}$/.test(id))
+  const texts = new Map<string, string>()
+
+  for (const id of ids) {
+    texts.set(id, (await io.read(`${loc.agentDir}/profiles/${id}.yaml`)) ?? '')
+  }
+
+  const named = (await io.read(`${loc.agentDir}/profiles/active`))?.trim()
+  const activeId = named !== undefined && ids.includes(named) ? named : ids.length === 1 ? ids[0] : undefined
+  const verified = verifiedProfiles(await io.read(`${loc.agentDir}/state.json`))
+  // Only the names leave variableValues here: a value is never drawn.
+  const isSet = new Set(Object.keys(await variableValues($, ctx, [...new Set([...texts.values()].flatMap(text => declaredVariables(text)))])))
+  const profiles = ids.map(id => profileView(id, texts.get(id) ?? '', id === activeId, verified.has(id), isSet))
+  let connectionFile: string | undefined
+
+  for (const name of CONNECTION_FILES) {
+    if ((await io.read(name)) !== undefined) {
+      connectionFile = name
+      break
+    }
+  }
+
+  return {
+    profiles,
+    wizard: wizardOf(profiles, connectionFile),
+    budgetLine: budgetText(await read($, budgetAtom), await read($, balanceAtom)),
+    sync: await read($, syncAtom),
+    canAct,
+  }
 }
 
 // ══ end feature: setup tab ═══════════════════════════════════════════════════
@@ -2632,6 +2847,22 @@ export const register: Register = (on, options) => {
     // ── end tool registrations: runs tab
 
     // ── tool registrations: setup tab
+    await $.tool.register({
+      name: 'sync',
+      description:
+        'Record this rook project upstream (rook sync): every agent\'s features, scenarios and profiles as one write, or one agent with `agent`. ' +
+        'explore and generate write on disk only, and a run needs what it tests recorded, so sync after them when rook says the tree is not recorded. ' +
+        'Returns what was recorded and where each agent now stands. With check: true it only reports the sync state (rook status) and writes nothing. ' +
+        'No credits: it calls no model and not the agent.',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          agent: { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$', description: 'Only this agent. Default: every agent on disk' },
+          check: { type: 'boolean', description: 'Only report the sync state; record nothing' },
+        },
+      },
+    })
     // ── end tool registrations: setup tab
 
     // ── tool registrations: ci
@@ -2790,6 +3021,15 @@ export const register: Register = (on, options) => {
   // ── end tool handlers: runs tab
 
   // ── tool handlers: setup tab
+  on('tool.call', { tool: SYNC_TOOL }, async ($, e) => {
+    const { agent, check } = e as unknown as { agent?: unknown; check?: unknown }
+
+    if (check === true) {
+      return { result: await checkSync($, ctx) }
+    }
+
+    return { result: await syncReply($, ctx, agent === undefined ? undefined : String(agent)) }
+  })
   // ── end tool handlers: setup tab
 
   // ── tool handlers: ci
@@ -2990,7 +3230,23 @@ export const register: Register = (on, options) => {
 
     // ── pane seam: setup tab
     if (tab === 'setup') {
-      return frame(<SetupTab el={el} readiness={readiness} onRecheck={() => recheck($, ctx)} />)
+      const panel = await setupPanel($, ctx, running === null && explaining === null)
+
+      return frame(
+        <SetupTab
+          el={el}
+          readiness={readiness}
+          onRecheck={() => recheck($, ctx)}
+          panel={panel}
+          actions={{
+            onUse: id => paneUseProfile($, ctx, id),
+            onTest: id => askProfileTest($, id),
+            onSync: () => paneSync($, ctx),
+            onCheckSync: () => paneCheckSync($, ctx),
+            onRefresh: () => $.ui.invalidate('ui.render'),
+          }}
+        />,
+      )
     }
     // ── end pane seam: setup tab
 

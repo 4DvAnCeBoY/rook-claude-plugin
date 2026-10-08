@@ -147,6 +147,7 @@ export type RookConfirm =
   | { action: 'generate'; instruction?: string; total?: number; force?: boolean; label: string; credits?: number }
   /** Re-run one scenario `times` times in a row (flaky check). */
   | { action: 'flaky'; id: string; times: number; label: string; credits?: number }
+  | { action: 'profile-test'; profile?: string; label: string; credits?: number }
 
 /** One step of a generate or explore in flight: a feature being planned, a scenario being written. */
 export type RookJobLane = { id: string; label: string; phase: string; since: number }
@@ -168,7 +169,12 @@ export type RookRunSummary = {
 }
 
 /** A per-session credit cap the mod enforces before run and generate. */
-export type RookBudget = { limit: number; spent: number }
+export type RookBudget = {
+  limit: number
+  spent: number
+  /** The `rook plan` balance when the budget was set: spent is that minus the balance now. Absent when it could not be read. */
+  startBalance?: number
+}
 
 declare module 'claude-code' {
   interface PluginState {
@@ -243,6 +249,15 @@ declare module 'claude-code' {
 
       // ── feature: setup tab (profile wizard, sync, budget)
       budget: RookBudget | null
+      /** `rook status --json` read back for the Setup tab, and the last `rook sync`; null until checked. */
+      sync: {
+        checkedAt: number
+        offline: boolean
+        agents: { id: string; tree: string; version?: number; upstream?: number; changes: string[]; owedRuns: number }[]
+        said?: string
+        error?: string
+        isSyncing?: boolean
+      } | null
       // ── end feature: setup tab
 
       // ── feature: band (precise re-test)
