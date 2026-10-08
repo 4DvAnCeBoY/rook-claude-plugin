@@ -85,6 +85,9 @@ import type { ScenarioInfo as DrillScenarioInfo } from './scenarios'
 // ── end imports: home
 
 // ── imports: trends
+import { TrendsTab } from './views/trends'
+import { heatGrid, heatMessageOf, previousRunId, TAB_KEYS, trendRuns, versusPrevious } from './trends'
+import type { TrendRun } from './trends'
 // ── end imports: trends
 
 // ── imports: live
@@ -262,6 +265,7 @@ const verdictsAtom = atom({ plugin: 'rook', key: 'verdicts' } as const, [])
 // ── end atoms: home
 
 // ── atoms: trends
+const runVersusAtom = atom({ plugin: 'rook', key: 'runVersus' } as const, null)
 // ── end atoms: trends
 
 // ── atoms: live
@@ -2267,10 +2271,12 @@ async function openRun($: EngineInterface, ctx: Ctx, runId: string): Promise<voi
   }
 
   await update($, runOpenAtom, () => run)
+  await refreshRunVersus($, ctx, run)
 }
 
 async function closeRun($: EngineInterface): Promise<void> {
   await update($, runOpenAtom, () => null)
+  await update($, runVersusAtom, () => null)
 }
 
 /** "Report to Claude": the opened run's failures (or its summary) as a prompt. */
@@ -3136,6 +3142,48 @@ async function drillAction($: EngineInterface, ctx: Ctx, action: DetailActionId)
 // ══ end feature: home ════════════════════════════════════════════════════════
 
 // ══ feature: trends (heat grid, runs per scenario) ═══════════════════════════
+
+/** Each finished run's pass rate, trusted pass rate and tokens, read once per run (a finished run never changes). */
+const trendCache = new Map<string, TrendRun>()
+
+/** The Trends tab's runs: the newest finished runs from the Runs tab's history, oldest first. Reads disk once per run. */
+async function trendRunsNow($: EngineInterface, ctx: Ctx): Promise<TrendRun[]> {
+  const loc = ctx.located
+  const history = await read($, historyAtom)
+
+  if (loc === undefined || history === null) {
+    return []
+  }
+
+  return trendRuns(ioOf($, ctx), loc.agentDir, history, ctx.rows, trendCache).catch(() => [])
+}
+
+/** The opened run against the finished run listed before it: set when the Runs tab opens a run. */
+async function refreshRunVersus($: EngineInterface, ctx: Ctx, run: RookRunView): Promise<void> {
+  const loc = ctx.located ?? (await where($, ctx))
+  const previous = previousRunId(await read($, historyAtom), run.runId)
+  const before = loc === undefined || previous === undefined ? undefined : await readRun(ioOf($, ctx), loc.agentDir, previous, ctx.rows).catch(() => undefined)
+
+  await update($, runVersusAtom, () => (before === undefined ? null : { runId: run.runId, previous: before.runId, ...versusPrevious(before.rows, run.rows) }))
+}
+
+/** What the heat grid posted: a cell opens that verdict in the drill-down; a key it does not use is the pane's hotkey. */
+async function heatMessage($: EngineInterface, ctx: Ctx, data: unknown): Promise<void> {
+  const message = heatMessageOf(data)
+
+  if (message?.type === 'pick') {
+    await openDetail($, ctx, message.runId, message.id)
+  } else if (message?.type === 'key') {
+    const tab = TAB_KEYS[message.key]
+
+    if (tab !== undefined) {
+      await setTab($, tab)
+    } else if (message.key === 'l') {
+      await toggleLens($)
+    }
+  }
+}
+
 // ══ end feature: trends ══════════════════════════════════════════════════════
 
 // ══ feature: live (run band, streamed results, stale verdicts, status line) ══
@@ -3623,6 +3671,19 @@ export const register: Register = (on, options) => {
     return { ...answer, text: answer.text.replace(/^rook(?::\s*|\s+)/, '') }
   })
 
+  // ── message hooks: trends
+  // The Trends tab's heat grid: a picked cell opens the drill-down; keys it hands back are the pane's hotkeys.
+  on('ui.message', async ($, e, next) => {
+    if (!e.module.includes('heat.client')) {
+      return next(e)
+    }
+
+    await heatMessage($, ctx, e.data)
+
+    return {}
+  })
+  // ── end message hooks: trends
+
   // ── render hooks: card
   // The model reads the result text unchanged; these draw it differently, and hand back the engine's own row when they cannot.
   on('ui.render', { component: 'ToolResult', props: { tool: CARD_TOOL } }, async ($, e, next) => (await cardRender($, ctx, e)) ?? next(e))
@@ -3763,7 +3824,16 @@ export const register: Register = (on, options) => {
 
     // ── pane seam: trends
     if (tab === 'trends') {
-      return frame(<Text dimColor>Trends: each scenario across recent runs.</Text>)
+      const grid = heatGrid(await read($, verdictsAtom))
+      const runs = await trendRunsNow($, ctx)
+      // Every table names Client, but only the terminal and the desktop draw one: elsewhere it is an empty fragment.
+      const Client = (e.surface === 'terminal' || e.surface === 'desktop') && 'Client' in resolved ? resolved.Client : undefined
+      const heat =
+        Client === undefined || grid.rows.length === 0 ? null : (
+          <Client key="trends-heat" module="./heat.client.tsx" props={{ runIds: grid.runIds, rows: grid.rows }} />
+        )
+
+      return frame(<TrendsTab el={el} grid={grid} runs={runs} heat={heat} onOpen={(runId, id) => openDetail($, ctx, runId, id)} />)
     }
     // ── end pane seam: trends
 
@@ -3773,6 +3843,7 @@ export const register: Register = (on, options) => {
       const runOpen = await read($, runOpenAtom)
       const compare = await read($, compareAtom)
       const runDiff = await read($, runDiffAtom)
+      const runVersus = await read($, runVersusAtom)
 
       return frame(
         <RunsTab
@@ -3789,6 +3860,8 @@ export const register: Register = (on, options) => {
           onCompareWith={() => compareWith($)}
           onPick={runId => pickRun($, ctx, runId)}
           onClearCompare={() => clearCompare($)}
+          versus={runVersus !== null && runVersus.runId === runOpen?.runId ? runVersus : null}
+          onScenario={id => (runOpen === null ? undefined : openDetail($, ctx, runOpen.runId, id))}
         />,
       )
     }

@@ -402,6 +402,8 @@ declare module 'claude-code' {
       // ── end feature: home
 
       // ── feature: trends (heat grid, runs per scenario)
+      /** The Runs tab's opened run against the finished run before it (hooks/trends.ts `versusPrevious`). */
+      runVersus: { runId: string; previous: string; regressed: string[]; fixed: string[] } | null
       // ── end feature: trends
 
       // ── feature: live (run band, streamed results, stale verdicts, status line states)
