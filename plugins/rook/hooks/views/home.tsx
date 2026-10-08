@@ -60,6 +60,8 @@ export type ChangeProps = HomeCommon & {
   /** False when no run was fully green and `lastGreen` is the run before the first regression. */
   isGreen?: boolean
   regressions: Owned[]
+  /** Agent bugs that were failing before this change too: still the developer's to fix, but not news. */
+  stillFailing: Owned[]
   changed: ChangedFile[]
   cost: Cost
   /** The run the cost compares against. */
@@ -426,6 +428,16 @@ export function ChangeView(props: ChangeProps) {
       {regressions.slice(0, 12).map(o => (
         <ScenarioRow key={`hr-${o.id}`} el={props.el} prefix="hr" o={o} width={width} note={brokeLine(o.row)} onOpen={props.onOpen} />
       ))}
+
+      {props.stillFailing.length > 0 && (
+        <Text bold>
+          Still failing <Text dimColor>· agent bugs from before this change ({props.stillFailing.length})</Text>
+        </Text>
+      )}
+      {props.stillFailing.slice(0, 6).map(o => (
+        <ScenarioRow key={`hsf-${o.id}`} el={props.el} prefix="hsf" o={o} width={width} note={brokeLine(o.row)} onOpen={props.onOpen} />
+      ))}
+      {props.stillFailing.length > 6 && <Text dimColor>  +{props.stillFailing.length - 6} more: switch to the Release view (l) for all of them</Text>}
 
       {(costText !== '' || cost.grew.length > 0) && <Text bold>Cost of this change</Text>}
       {costText !== '' && (

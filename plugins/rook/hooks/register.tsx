@@ -1369,6 +1369,9 @@ async function rookCommand($: EngineInterface, ctx: Ctx, e: CommandRunInput): Pr
     case 'pane':
     case 'open': {
       const opened = await openPane($, { focus: true })
+
+      // Printing the command's reply can hand the keys back to the prompt; ask again once it has.
+      $.clock.after(150, () => openPane($, { focus: true }).then(() => undefined, () => undefined))
       const readiness = await readinessNow($, ctx)
       const setup = readiness?.next === undefined ? '' : `\n${checklistText(readiness)}`
 
@@ -3360,9 +3363,12 @@ async function homeChange($: EngineInterface, ctx: Ctx, snapshot: RookSnapshot) 
   const affected = [...new Set([...changed.flatMap(f => f.scenarios.map(s => s.id)), ...(stale?.scenarios.map(s => s.id) ?? [])])]
   const notYours = notYoursLine(owned)
 
+  const regressed = new Set(regressions.map(o => o.id))
+
   return {
     ...(lastGreen !== undefined && { lastGreen, isGreen: isGreenRun(input.verdicts, lastGreen) }),
     regressions,
+    stillFailing: owned.filter(o => o.owner === 'agent' && !regressed.has(o.id)),
     changed,
     cost: costOf(latest?.rows ?? [], before),
     ...(previousRunId !== undefined && { previousRunId }),
