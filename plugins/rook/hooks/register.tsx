@@ -4390,9 +4390,20 @@ export const register: Register = (on, options) => {
         {freshness !== undefined ? <Text color={freshness.startsWith('●') ? 'green' : undefined} dimColor={!freshness.startsWith('●')}> · {freshness}</Text> : ''}
       </Text>
     )
+    // Claude Code docks panes and draws Client charts only in its fullscreen layout; on the main
+    // screen the pane sits inline and the Trends grid is text. Say how to get the side pane.
+    const inlineHint =
+      e.props.placement === 'inline' ? (
+        <Box key="inline-hint">
+          <Text color="yellow" wrap="wrap">
+            Inline above the prompt. For the side pane and clickable charts, type /tui fullscreen (Claude Code restarts and resumes this session).
+          </Text>
+        </Box>
+      ) : null
     const frame = (body: unknown) => (
       <Box flexDirection="column">
         {header}
+        {inlineHint}
         <TabBar el={el} tab={tab} lens={lens} onTab={async next => { await setTab($, next); await keepFocus($) }} onLens={() => toggleLens($)} />
         {failedBefore}
         {jobView}
