@@ -1,7 +1,40 @@
 import { atom, read, update } from 'claude-code'
 import type { CommandRunInput, EngineInterface, Register } from 'claude-code'
 
-import type { RookCluster, RookReadiness, RookRunView, RookScenarioRow, RookSnapshot, RookStepId } from '../types'
+import type { RookCluster, RookConfirm, RookReadiness, RookRunView, RookScenarioRow, RookSnapshot, RookStepId, RookTab } from '../types'
+import type { El } from './views/kit'
+import { TabBar } from './views/tabs'
+import { ConfirmBar } from './views/confirm'
+import { SetupTab } from './views/setup'
+// ── imports: progress
+import { JobLanes } from './views/job'
+// ── end imports: progress
+
+// ── imports: health
+// ── end imports: health
+
+// ── imports: runs tab
+import { RunsTab } from './views/runs'
+// ── end imports: runs tab
+
+// ── imports: scenarios tab
+import { ScenariosTab } from './views/scenarios'
+// ── end imports: scenarios tab
+
+// ── imports: setup tab
+// ── end imports: setup tab
+
+// ── imports: band
+// ── end imports: band
+
+// ── imports: status line
+// ── end imports: status line
+
+// ── imports: card
+// ── end imports: card
+
+// ── imports: ci
+// ── end imports: ci
 import {
   agentsText,
   balanceText,
@@ -115,6 +148,44 @@ const lastErrorAtom = atom({ plugin: 'rook', key: 'lastError' } as const, null)
 const agentsAtom = atom({ plugin: 'rook', key: 'agents' } as const, [])
 const balanceAtom = atom({ plugin: 'rook', key: 'balance' } as const, null)
 const explainingAtom = atom({ plugin: 'rook', key: 'explaining' } as const, null)
+const tabAtom = atom({ plugin: 'rook', key: 'tab' } as const, 'health')
+const confirmAtom = atom({ plugin: 'rook', key: 'confirm' } as const, null)
+
+// ── atoms: progress
+const jobAtom = atom({ plugin: 'rook', key: 'job' } as const, null)
+// ── end atoms: progress
+
+// ── atoms: health
+// ── end atoms: health
+
+// ── atoms: runs tab
+const historyAtom = atom({ plugin: 'rook', key: 'history' } as const, null)
+const compareAtom = atom({ plugin: 'rook', key: 'compare' } as const, [])
+// ── end atoms: runs tab
+
+// ── atoms: scenarios tab
+const selectedAtom = atom({ plugin: 'rook', key: 'selected' } as const, [])
+const filterAtom = atom({ plugin: 'rook', key: 'filter' } as const, 'all')
+const draftAtom = atom({ plugin: 'rook', key: 'draft' } as const, '')
+const flakyAtom = atom({ plugin: 'rook', key: 'flaky' } as const, {})
+// ── end atoms: scenarios tab
+
+// ── atoms: setup tab
+const budgetAtom = atom({ plugin: 'rook', key: 'budget' } as const, null)
+// ── end atoms: setup tab
+
+// ── atoms: band
+const untickedAtom = atom({ plugin: 'rook', key: 'unticked' } as const, [])
+// ── end atoms: band
+
+// ── atoms: status line
+// ── end atoms: status line
+
+// ── atoms: card
+// ── end atoms: card
+
+// ── atoms: ci
+// ── end atoms: ci
 
 // The plugin's own tools as exact patterns: the engine's tool table is laid
 // when the mod loads, before session.start registers them.
@@ -129,6 +200,12 @@ const EXPLORE_TOOL = /^mcp__rook__explore$/
 const PROFILE_TOOL = /^mcp__rook__profile_test$/
 const AGENT_TOOL = /^mcp__rook__agent$/
 const CURATE_TOOL = /^mcp__rook__curate$/
+// ── tool patterns: runs tab
+// ── end tool patterns: runs tab
+// ── tool patterns: setup tab
+// ── end tool patterns: setup tab
+// ── tool patterns: ci
+// ── end tool patterns: ci
 /** Every tool that writes a file; MultiEdit exists on some builds only. */
 const EDIT_TOOLS = /^(Edit|Write|MultiEdit|NotebookEdit)$/
 
@@ -598,7 +675,7 @@ async function startRun($: EngineInterface, ctx: Ctx, request: RunRequest, sourc
     return `rook: ${unready}`
   }
 
-  const blocked = await prodBlock($, ctx, request.profile)
+  const blocked = (await prodBlock($, ctx, request.profile)) ?? (await budgetBlock($, ctx, 'run'))
 
   if (blocked !== undefined) {
     return blocked
@@ -634,7 +711,7 @@ async function toolRun($: EngineInterface, ctx: Ctx, request: RunRequest, signal
     return { deny: `rook ${unready}` }
   }
 
-  const blocked = await prodBlock($, ctx, request.profile)
+  const blocked = (await prodBlock($, ctx, request.profile)) ?? (await budgetBlock($, ctx, 'run'))
 
   if (blocked !== undefined) {
     return { deny: blocked }
@@ -803,10 +880,10 @@ async function generateRun($: EngineInterface, ctx: Ctx, request: GenerateReques
     return `rook: ${args.error}`
   }
 
-  const unready = await setupBlock($, ctx, NEEDS.generate, 'generate scenarios')
+  const unready = (await setupBlock($, ctx, NEEDS.generate, 'generate scenarios')) ?? (await budgetBlock($, ctx, 'generate'))
 
   if (unready !== undefined) {
-    return `rook: ${unready}`
+    return `rook: ${unready.replace(/^rook:\s*/, '')}`
   }
 
   try {
@@ -1015,6 +1092,28 @@ async function rookCommand($: EngineInterface, ctx: Ctx, e: CommandRunInput): Pr
 
       return { text: (opened.isPlaced ? 'pane opened.' : `pane is waiting: ${opened.reason}`) + setup }
     }
+    case 'tab': {
+      const tab = rest[0] as RookTab | undefined
+
+      if (tab !== 'health' && tab !== 'runs' && tab !== 'scenarios' && tab !== 'setup') {
+        return { text: 'rook: tab health, runs, scenarios or setup.' }
+      }
+
+      await setTab($, tab)
+      await $.ui.open({ id: PANE, title: 'rook' })
+
+      return { text: `${tab} tab open.` }
+    }
+    case 'compare':
+      return { text: await compareReply($, ctx, rest) }
+    case 'flaky':
+      return { text: await flakyReply($, ctx, rest) }
+    case 'sync':
+      return { text: await syncReply($, ctx) }
+    case 'budget':
+      return { text: await budgetReply($, ctx, rest) }
+    case 'ci':
+      return { text: await ciReply($, ctx, rest) }
     case 'status':
       return { text: await statusReply($, ctx) }
     case 'runs':
@@ -1542,6 +1641,121 @@ async function curateReply($: EngineInterface, ctx: Ctx, verb: string, ids: stri
   return curateText(ran.doc)
 }
 
+// ── shared: tabs and the confirm bar ─────────────────────────────────────────
+
+async function setTab($: EngineInterface, tab: RookTab): Promise<void> {
+  await update($, tabAtom, () => tab)
+}
+
+/** Park a credit-spending action in the pane until the person confirms it. */
+async function askConfirm($: EngineInterface, confirm: RookConfirm): Promise<void> {
+  await update($, confirmAtom, () => confirm)
+}
+
+/** The pane's Confirm: replay the parked action. */
+async function confirmNow($: EngineInterface, ctx: Ctx): Promise<void> {
+  const confirm = await read($, confirmAtom)
+
+  await update($, confirmAtom, () => null)
+
+  if (confirm?.action === 'run') {
+    await paneRun($, ctx, confirm.only === undefined ? {} : { only: confirm.only })
+  } else if (confirm?.action === 'generate') {
+    const request: GenerateRequest = {
+      ...(confirm.instruction !== undefined && { instruction: confirm.instruction }),
+      ...(confirm.total !== undefined && { total: confirm.total }),
+      ...(confirm.force === true && { force: true }),
+    }
+
+    $.ui.toast('rook: generating scenarios in the background.')
+    $.clock.after(0, () => backgroundGenerate($, ctx, request))
+  }
+}
+
+// ══ feature: progress (generate / explore lanes) ═════════════════════════════
+// ══ end feature: progress ════════════════════════════════════════════════════
+
+// ══ feature: health (Unable to Verify fixer, cancel, run confirm) ════════════
+// ══ end feature: health ══════════════════════════════════════════════════════
+
+// ══ feature: runs tab (history, compare) ═════════════════════════════════════
+
+/** `/rook compare <run> <run>`. */
+async function compareReply($: EngineInterface, ctx: Ctx, args: string[]): Promise<string> {
+  void $
+  void ctx
+  void args
+
+  return 'rook: compare is not built yet.'
+}
+
+// ══ end feature: runs tab ════════════════════════════════════════════════════
+
+// ══ feature: scenarios tab (filter, select, detail, flaky, generate box) ═════
+
+/** `/rook flaky <id> [times]`. */
+async function flakyReply($: EngineInterface, ctx: Ctx, args: string[]): Promise<string> {
+  void $
+  void ctx
+  void args
+
+  return 'rook: flaky checks are not built yet.'
+}
+
+// ══ end feature: scenarios tab ═══════════════════════════════════════════════
+
+// ══ feature: setup tab (profile wizard, sync, budget) ════════════════════════
+
+/** Refuses a run or generate that the session's credit budget would not cover; undefined when allowed. */
+async function budgetBlock($: EngineInterface, ctx: Ctx, kind: 'run' | 'generate'): Promise<string | undefined> {
+  void $
+  void ctx
+  void kind
+
+  return undefined
+}
+
+/** `/rook budget [N|off]`. */
+async function budgetReply($: EngineInterface, ctx: Ctx, args: string[]): Promise<string> {
+  void $
+  void ctx
+  void args
+
+  return 'rook: budgets are not built yet.'
+}
+
+/** `/rook sync`: record this project upstream (rook sync). */
+async function syncReply($: EngineInterface, ctx: Ctx): Promise<string> {
+  void $
+  void ctx
+
+  return 'rook: sync is not built yet.'
+}
+
+// ══ end feature: setup tab ═══════════════════════════════════════════════════
+
+// ══ feature: band (precise re-test) ══════════════════════════════════════════
+// ══ end feature: band ════════════════════════════════════════════════════════
+
+// ══ feature: status line ═════════════════════════════════════════════════════
+// ══ end feature: status line ═════════════════════════════════════════════════
+
+// ══ feature: card (transcript verdict card) ══════════════════════════════════
+// ══ end feature: card ════════════════════════════════════════════════════════
+
+// ══ feature: ci ══════════════════════════════════════════════════════════════
+
+/** `/rook ci`: write a CI workflow that runs rook on pull requests. */
+async function ciReply($: EngineInterface, ctx: Ctx, args: string[]): Promise<string> {
+  void $
+  void ctx
+  void args
+
+  return 'rook: ci is not built yet.'
+}
+
+// ══ end feature: ci ══════════════════════════════════════════════════════════
+
 const APPROVALS_NOTE =
   "rook's own tool calls during the command (reading the agent's code, running its commands) are approved with --yes, " +
   'unless the person set allowRules, in which case only those are approved and rook declines the rest.'
@@ -1771,6 +1985,15 @@ export const register: Register = (on, options) => {
       },
     })
 
+    // ── tool registrations: runs tab
+    // ── end tool registrations: runs tab
+
+    // ── tool registrations: setup tab
+    // ── end tool registrations: setup tab
+
+    // ── tool registrations: ci
+    // ── end tool registrations: ci
+
     await poll($, ctx)
     ctx.isPrimed = true
     $.clock.every(POLL_MS, () => poll($, ctx))
@@ -1897,6 +2120,15 @@ export const register: Register = (on, options) => {
     return profileReply($, ctx, request, next.signal)
   })
 
+  // ── tool handlers: runs tab
+  // ── end tool handlers: runs tab
+
+  // ── tool handlers: setup tab
+  // ── end tool handlers: setup tab
+
+  // ── tool handlers: ci
+  // ── end tool handlers: ci
+
   // 7 · production guard over the model's shell
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     if (!isRunCommand(e.command)) {
@@ -1929,6 +2161,9 @@ export const register: Register = (on, options) => {
     return { ...answer, text: answer.text.replace(/^rook(?::\s*|\s+)/, '') }
   })
 
+  // ── render hooks: card
+  // ── end render hooks: card
+
   // 2 · the turn's spinner: where Claude's rook run is, at any terminal width
   on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
     const running = await read($, runningAtom)
@@ -1946,7 +2181,9 @@ export const register: Register = (on, options) => {
 
   // 2 · the live pane
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text, Button, Link, Markdown } = $.ui.resolve(e)
+    const resolved = $.ui.resolve(e)
+    const { Box, Text, Button, Link, Markdown } = resolved
+    const el = resolved as unknown as El
     const snapshot = await read($, snapshotAtom)
     const running = await read($, runningAtom)
     const expanded = await read($, expandedAtom)
@@ -1955,9 +2192,19 @@ export const register: Register = (on, options) => {
     const agents = await read($, agentsAtom)
     const balance = balanceText(await read($, balanceAtom))
     const explaining = await read($, explainingAtom)
+    const tab = await read($, tabAtom)
+    const confirm = await read($, confirmAtom)
     await read($, tickAtom)
     const now = await $.clock.now()
     const width = Math.max(20, e.props.bodyColumns)
+
+    // ── pane seam: progress
+    const job = await read($, jobAtom)
+    const jobView = job === null ? null : <JobLanes el={el} job={job} now={now} />
+    // ── end pane seam: progress
+
+    const confirmView =
+      confirm === null ? null : <ConfirmBar el={el} confirm={confirm} onConfirm={() => confirmNow($, ctx)} onCancel={() => update($, confirmAtom, () => null)} />
     const readiness = snapshot?.readiness
     const failedBefore = lastError !== null && (
       <Box key="last-error">
@@ -1969,34 +2216,53 @@ export const register: Register = (on, options) => {
 
     // No agent to show: the setup checklist, the next step highlighted.
     if (snapshot === null || snapshot.agentId === undefined) {
-      const nextId = readiness?.steps.find(step => !step.ok)?.id
-      const isCliStep = nextId === 'installed' || nextId === 'signed_in'
-
       return (
         <Box flexDirection="column">
-          <Text bold>rook · setup</Text>
-          {readiness === undefined && <Text dimColor>Checking this directory…</Text>}
-          {readiness?.steps.map(step => (
-            <Box key={`s-${step.id}`}>
-              <Text color={step.ok ? 'green' : step.id === nextId ? 'yellow' : undefined} dimColor={!step.ok && step.id !== nextId} bold={step.id === nextId}>
-                {step.ok ? '✓' : '✗'} {step.label}
-              </Text>
-            </Box>
-          ))}
-          {readiness?.next !== undefined && (
-            <Box key="next">
-              <Text wrap="wrap">
-                <Text bold>Next: </Text>
-                {readiness.next}
-              </Text>
-            </Box>
-          )}
+          <SetupTab el={el} readiness={readiness} onRecheck={() => recheck($, ctx)} />
           {failedBefore}
-          {isCliStep && <Button key="recheck" label="Check again" onPress={() => recheck($, ctx)} />}
+          {jobView}
+          {confirmView}
         </Box>
       )
     }
 
+    const header = (
+      <Text bold wrap="truncate-end">
+        rook · {snapshot.agentId ?? ''}
+        {snapshot.profileId ? <Text dimColor> · profile {snapshot.profileId}</Text> : ''}
+        {balance !== undefined ? <Text dimColor> · {balance}</Text> : ''}
+      </Text>
+    )
+    const frame = (body: unknown) => (
+      <Box flexDirection="column">
+        {header}
+        <TabBar el={el} tab={tab} onTab={next => setTab($, next)} />
+        {failedBefore}
+        {jobView}
+        {confirmView}
+        {body as never}
+      </Box>
+    )
+
+    // ── pane seam: runs tab
+    if (tab === 'runs') {
+      return frame(<RunsTab el={el} />)
+    }
+    // ── end pane seam: runs tab
+
+    // ── pane seam: scenarios tab
+    if (tab === 'scenarios') {
+      return frame(<ScenariosTab el={el} />)
+    }
+    // ── end pane seam: scenarios tab
+
+    // ── pane seam: setup tab
+    if (tab === 'setup') {
+      return frame(<SetupTab el={el} readiness={readiness} onRecheck={() => recheck($, ctx)} />)
+    }
+    // ── end pane seam: setup tab
+
+    // The Health tab. ── pane seam: health (owned by the health feature, through the end of this hook)
     // Results can be read while rook would refuse to run (no project selected, signed out…): say so, offer no run.
     const runBlock = blockedText(readiness, NEEDS.run, 'run')
 
@@ -2081,13 +2347,8 @@ export const register: Register = (on, options) => {
       return run !== undefined ? <Button key={`fix-${id}`} label="Fix this with Claude" onPress={() => fixOne($, ctx, run, id)} /> : null
     }
 
-    return (
+    return frame(
       <Box flexDirection="column">
-        <Text bold wrap="truncate-end">
-          rook · {snapshot.agentId ?? ''}
-          {snapshot.profileId ? <Text dimColor> · profile {snapshot.profileId}</Text> : ''}
-          {balance !== undefined ? <Text dimColor> · {balance}</Text> : ''}
-        </Text>
         {agents.length > 1 && (
           <Box flexDirection="row" gap={1}>
             <Text dimColor>agents</Text>
@@ -2113,7 +2374,6 @@ export const register: Register = (on, options) => {
             </Text>
           </Box>
         )}
-        {failedBefore}
         {snapshot.current.length > 0 && (
           <Box flexDirection="row" gap={2}>
             <Text dimColor>agent</Text>

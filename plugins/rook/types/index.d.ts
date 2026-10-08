@@ -135,6 +135,39 @@ export type RookRunning = {
 
 export type RookProdConfirmation = { cwd: string; profile: string; until: number }
 
+/** The pane's tabs. */
+export type RookTab = 'health' | 'runs' | 'scenarios' | 'setup'
+
+/**
+ * Something that spends credits, waiting for the person's yes in the pane.
+ * Data only: the confirm button replays it.
+ */
+export type RookConfirm =
+  | { action: 'run'; only?: string[]; label: string; credits?: number }
+  | { action: 'generate'; instruction?: string; total?: number; force?: boolean; label: string; credits?: number }
+
+/** One step of a generate or explore in flight: a feature being planned, a scenario being written. */
+export type RookJobLane = { id: string; label: string; phase: string; since: number }
+
+/** A generate or explore in flight, for the pane's lanes and the spinner. */
+export type RookJob = { kind: 'generate' | 'explore'; label: string; startedAt: number; lanes: RookJobLane[]; last?: string; done?: number; planned?: number }
+
+/** One finished run, for the Runs tab and the status line's trend. */
+export type RookRunSummary = {
+  runId: string
+  name?: string
+  created?: string
+  planned: number
+  counts: RookCounts
+  passRate?: number
+  credits?: number
+  durationMs?: number
+  isTest?: boolean
+}
+
+/** A per-session credit cap the mod enforces before run and generate. */
+export type RookBudget = { limit: number; spent: number }
+
 declare module 'claude-code' {
   interface PluginState {
     rook: {
@@ -160,6 +193,46 @@ declare module 'claude-code' {
       balance: number | null
       /** The run `rook report --rca` is explaining now. */
       explaining: string | null
+      /** The pane's open tab. */
+      tab: RookTab
+      /** A credit-spending action waiting for the person's yes. */
+      confirm: RookConfirm | null
+
+      // ── feature: progress (generate / explore lanes)
+      job: RookJob | null
+      // ── end feature: progress
+
+      // ── feature: health (Unable to Verify fixer, cancel, run confirm)
+      // ── end feature: health
+
+      // ── feature: runs tab (history, compare)
+      history: RookRunSummary[] | null
+      compare: string[]
+      // ── end feature: runs tab
+
+      // ── feature: scenarios tab (filter, select, detail, flaky, generate box)
+      selected: string[]
+      filter: string
+      draft: string
+      flaky: Record<string, RookStatus[]>
+      // ── end feature: scenarios tab
+
+      // ── feature: setup tab (profile wizard, sync, budget)
+      budget: RookBudget | null
+      // ── end feature: setup tab
+
+      // ── feature: band (precise re-test)
+      unticked: string[]
+      // ── end feature: band
+
+      // ── feature: status line
+      // ── end feature: status line
+
+      // ── feature: card (transcript verdict card)
+      // ── end feature: card
+
+      // ── feature: ci
+      // ── end feature: ci
     }
   }
 }
