@@ -17,7 +17,7 @@ export function TabBar(props: { el: El; tab: RookTab; onTab: (tab: RookTab) => v
       {TABS.map(t =>
         t.id === props.tab ? (
           <Text key={`tab-${t.id}`} bold underline>
-            {t.label}
+            {t.hotkey}: {t.label}
           </Text>
         ) : (
           <Button key={`tab-${t.id}`} plain label={t.label} hotkey={t.hotkey} onPress={() => props.onTab(t.id)} />

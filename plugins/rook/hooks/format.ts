@@ -37,6 +37,11 @@ export const credits = (value: number | undefined): string | undefined => {
 }
 
 /** `4m12s`, `33.1s`, `850ms`. */
+/** A live timer: whole seconds under a minute (12s), then 2m05s. */
+export function elapsed(ms: number): string {
+  return ms < 60_000 ? `${Math.floor(ms / 1000)}s` : duration(ms)
+}
+
 export function duration(ms: number): string {
   if (ms < 1000) {
     return `${Math.round(ms)}ms`
@@ -477,6 +482,7 @@ function generateProse(stdout: string): string | undefined {
       `${Number(current ?? 0) > 0 ? `, ${plural(Number(current), 'feature')} already covered` : ''}` +
       `${Number(declined ?? 0) > 0 ? `, ${plural(Number(declined), 'feature')} the plan left alone` : ''}` +
       `${spent === undefined ? '' : ` · ${credits(Number(spent))}`}.`,
+    ...(rest.length > 0 ? ["rook's plan notes (why each feature was or wasn't planned, from before this generate):"] : []),
     ...rest.slice(0, 6).map(text => `  ${clip(text, 300)}`),
     ...(count > 0 ? ['Run the new scenarios with the rook run tool; the rook scenarios tool lists their ids.'] : []),
   ].join('\n')

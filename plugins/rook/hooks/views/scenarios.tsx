@@ -14,6 +14,8 @@ export type ScenariosTabProps = {
   filter: string
   selected: string[]
   flaky: Record<string, RookStatus[]>
+  /** Each checked scenario's verdict from before its flaky check. */
+  flakyPrior?: Record<string, RookStatus>
   detail: ScenarioDetail | undefined
   draft: string
   /** Nothing in flight and the checklist allows a run. */
@@ -41,6 +43,10 @@ const mark = (status: RookStatus | undefined): { icon: string; color?: string } 
   status === 'Pass' ? { icon: '✓', color: 'green' } : status === 'Fail' ? { icon: '✗', color: 'red' } : status === 'Unable to Verify' ? { icon: '?', color: 'yellow' } : { icon: '·' }
 
 const clipped = (text: string, max: number): string => (text.length <= max ? text : `${text.slice(0, Math.max(1, max - 1))}…`)
+
+/** A flaky check's verdicts with the one from before it, which counts toward the judgement. */
+const withPrior = (verdicts: RookStatus[] | undefined, prior: RookStatus | undefined): RookStatus[] | undefined =>
+  prior === undefined || verdicts === undefined || verdicts.length === 0 ? verdicts : [prior, ...verdicts]
 
 /** The Scenarios tab: filter, select, run selected, detail, flaky checks, generate. Owned by the scenarios-tab feature. */
 export function ScenariosTab(props: ScenariosTabProps) {
@@ -93,8 +99,9 @@ export function ScenariosTab(props: ScenariosTabProps) {
         )}
         {verdicts !== undefined && verdicts.length > 0 && (
           <Text color={isFlaky(verdicts) ? 'yellow' : undefined} wrap="wrap">
-            flaky check: {verdicts.join(', ')}
-            {isFlaky(verdicts) ? ' · flaky' : ''}
+            flaky check: {props.flakyPrior?.[s.id] === undefined ? '' : `earlier ${props.flakyPrior[s.id]}, then `}
+            {verdicts.join(', ')}
+            {isFlaky(withPrior(verdicts, props.flakyPrior?.[s.id])) ? ' · flaky' : ''}
           </Text>
         )}
         <Box flexDirection="row" gap={1}>
@@ -126,7 +133,7 @@ export function ScenariosTab(props: ScenariosTabProps) {
       {rows.slice(0, MAX_ROWS).flatMap(s => {
         const m = mark(s.status)
         const verdicts = flaky[s.id]
-        const tags = [s.featureId, [s.class, s.category].filter(Boolean).join('/') || undefined, s.excluded ? 'excluded' : undefined, isFlaky(verdicts) ? 'flaky' : undefined]
+        const tags = [s.featureId, [s.class, s.category].filter(Boolean).join('/') || undefined, s.excluded ? 'excluded' : undefined, isFlaky(withPrior(verdicts, props.flakyPrior?.[s.id])) ? 'flaky' : undefined]
           .filter(Boolean)
           .join(' · ')
         const isOpen = detail?.scenario.id === s.id

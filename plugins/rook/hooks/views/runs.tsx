@@ -189,8 +189,9 @@ function CompareView(props: RunsTabProps & { diff: RunDiff }) {
       {section('cmp-fixed', 'Fixed', 'green', diff.fixed)}
       {section('cmp-regressed', 'Regressed', 'red', diff.regressed)}
       {section('cmp-added', 'New in head', undefined, diff.added)}
-      {section('cmp-missing', 'Missing from head', 'yellow', diff.missing)}
+      {section('cmp-missing', 'Not re-run in head', 'yellow', diff.missing)}
       {section('cmp-still', 'Still failing', 'red', diff.stillFailing)}
+      {section('cmp-unverified', 'Still Unable to Verify (not Fail)', 'yellow', diff.stillUnverified ?? [])}
       <Text dimColor>{diff.stillPassing} still passing</Text>
     </Box>
   )

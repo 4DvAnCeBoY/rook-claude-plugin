@@ -42,6 +42,7 @@ import type { SetupPanel } from './views/setup'
 // ── end imports: setup tab
 
 // ── imports: band
+import { changedSources, sourceStamps } from './sources'
 import { mergeReach, reach } from './impact'
 import type { Reach } from './impact'
 import { tickedOf } from './format'
@@ -49,6 +50,7 @@ import { RetestBand } from './views/band'
 // ── end imports: band
 
 // ── imports: status line
+import { elapsed as liveTime } from './format'
 import { composeStatus, trendOf } from './statusline'
 import type { TrendPoint } from './statusline'
 // ── end imports: status line
@@ -196,6 +198,7 @@ const selectedAtom = atom({ plugin: 'rook', key: 'selected' } as const, [])
 const filterAtom = atom({ plugin: 'rook', key: 'filter' } as const, 'all')
 const draftAtom = atom({ plugin: 'rook', key: 'draft' } as const, '')
 const flakyAtom = atom({ plugin: 'rook', key: 'flaky' } as const, {})
+const flakyPriorAtom = atom({ plugin: 'rook', key: 'flakyPrior' } as const, {})
 const scenarioDetailAtom = atom({ plugin: 'rook', key: 'scenarioDetail' } as const, null)
 // ── end atoms: scenarios tab
 
@@ -299,6 +302,8 @@ type Ctx = {
   cli: CliFacts
   /** The agent's runs list as the Runs tab last read it, to skip re-reading when nothing changed. */
   historySignature?: string
+  /** Modification times of the agent's tracked sources at the last poll, keyed by agent directory. */
+  sourceStamps?: { agentDir: string; stamps: Map<string, number> }
   /** The status line's recent finished runs, re-read only when the runs on disk change. */
   statusTrend?: { key: string; points: TrendPoint[] }
   /** Ends the background run the person started (pane, /rook run), for its Cancel. */
@@ -521,6 +526,7 @@ async function poll($: EngineInterface, ctx: Ctx): Promise<void> {
     }
 
     await syncAgents($, ctx, loc)
+    await watchSources($, ctx, loc)
 
     // Scenarios or features changed outside this session (rook generate in a
     // terminal, an exclude): re-read the index and redraw.
@@ -1118,6 +1124,34 @@ async function noted($: EngineInterface, ctx: Ctx, path: string): Promise<void> 
 
   await update($, bandHiddenAtom, () => false)
   await showStatus($, ctx)
+}
+
+/**
+ * Edits Claude's Edit tool never saw: a shell command, the person's editor,
+ * another terminal. Each poll stamps the agent's tracked sources; a file that
+ * appeared or changed since the last poll goes to `noted`, like an edit would.
+ * The first poll for an agent only takes the baseline.
+ */
+async function watchSources($: EngineInterface, ctx: Ctx, loc: Located): Promise<void> {
+  if (!ctx.isRetestBand) {
+    return
+  }
+
+  const io = ioOf($, ctx)
+  const index = ctx.agentIndex ?? (await indexAgent(io, loc.agentDir))
+  ctx.agentIndex = index
+  const stamps = await sourceStamps(io, index.tracks)
+  const before = ctx.sourceStamps?.agentDir === loc.agentDir ? ctx.sourceStamps.stamps : undefined
+
+  ctx.sourceStamps = { agentDir: loc.agentDir, stamps }
+
+  if (before === undefined) {
+    return
+  }
+
+  for (const rel of changedSources(before, stamps)) {
+    await noted($, ctx, `${ctx.cwd.replace(/\/$/, '')}/${rel}`).catch(() => undefined)
+  }
 }
 
 async function fixWithClaude($: EngineInterface, ctx: Ctx, run: RookRunView): Promise<void> {
@@ -2290,14 +2324,22 @@ async function flakyStart($: EngineInterface, ctx: Ctx, id: string, times: numbe
 
   await update($, runningAtom, () => ({ startedAt, label: `${id} ×${times} (flaky check)`, source }))
   await update($, lastErrorAtom, () => null)
+  // Its newest earlier verdict counts too: Pass before, then Fail twice, is flaky.
+  const prior = (await read($, snapshotAtom))?.current.find(row => row.id === id)?.status
+
   await update($, flakyAtom, flaky => ({ ...flaky, [id]: [] }))
+  await update($, flakyPriorAtom, priors => {
+    const { [id]: _, ...rest } = priors
+
+    return prior === undefined ? rest : { ...rest, [id]: prior }
+  })
   await showStatus($, ctx)
-  $.clock.after(0, () => flakyLoop($, ctx, id, times, args.argv))
+  $.clock.after(0, () => flakyLoop($, ctx, id, times, args.argv, prior))
 
   return `rook: re-running ${id} ${times} times in a row in the background. The Scenarios tab marks it flaky if the verdicts disagree.`
 }
 
-async function flakyLoop($: EngineInterface, ctx: Ctx, id: string, times: number, argv: string[]): Promise<void> {
+async function flakyLoop($: EngineInterface, ctx: Ctx, id: string, times: number, argv: string[], prior?: RookStatus): Promise<void> {
   const verdicts: RookStatus[] = []
   let problem: string | undefined
 
@@ -2343,7 +2385,7 @@ async function flakyLoop($: EngineInterface, ctx: Ctx, id: string, times: number
     await update($, lastErrorAtom, () => ({ source: 'run', text: `flaky check of ${id}: ${clip(problem!, 400)}`, at }))
   }
 
-  $.ui.toast(`rook: ${flakyText(id, verdicts, times)}`)
+  $.ui.toast(`rook: ${flakyText(id, verdicts, times, prior)}`)
 }
 
 /** `/rook flaky <id> [times]`. */
@@ -3367,6 +3409,7 @@ export const register: Register = (on, options) => {
       const filter = await read($, filterAtom)
       const selected = await read($, selectedAtom)
       const flaky = await read($, flakyAtom)
+      const flakyPrior = await read($, flakyPriorAtom)
       const draft = await read($, draftAtom)
       const openId = await read($, scenarioDetailAtom)
       const views = withVerdicts(await scenarioList($, ctx), snapshot.current)
@@ -3383,6 +3426,7 @@ export const register: Register = (on, options) => {
           filter={filter}
           selected={selected}
           flaky={flaky}
+          flakyPrior={flakyPrior}
           detail={detail}
           draft={draft}
           canRun={running === null && blockedText(readiness, NEEDS.run, 'run') === undefined}
@@ -3593,9 +3637,9 @@ export const register: Register = (on, options) => {
         {running !== null && (
           <Box key="running" flexDirection="row" gap={1}>
             <Text color="cyan" wrap="truncate-end">
-              ▸ running {running.label} · {duration(Math.max(0, now - running.startedAt))}
+              ▸ running {running.label} · {liveTime(Math.max(0, now - running.startedAt))}
             </Text>
-            {running.source !== 'tool' && <Button key="cancel-run" label="Cancel" role="dismiss" onPress={() => cancelRun($, ctx)} />}
+            {running.source !== 'tool' && <Button key="cancel-run" label="Cancel" hotkey="c" role="dismiss" onPress={() => cancelRun($, ctx)} />}
           </Box>
         )}
         {run !== undefined &&
@@ -3607,7 +3651,7 @@ export const register: Register = (on, options) => {
               <Box key={`l-${lane.id}`}>
                 <Text wrap="truncate-end">
                   <Text color="cyan">⟡ {lane.id}</Text>
-                  {elapsed !== undefined && <Text color={elapsed > 60_000 ? 'yellow' : undefined}> {duration(elapsed)}</Text>}
+                  {elapsed !== undefined && <Text color={elapsed > 60_000 ? 'yellow' : undefined}> {liveTime(elapsed)}</Text>}
                   <Text dimColor> {lane.phase}</Text> {lane.title}
                 </Text>
               </Box>

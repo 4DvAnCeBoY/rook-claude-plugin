@@ -59,7 +59,8 @@ describe('history · the diff', () => {
     expect(diff.regressed.map(row => row.id)).toEqual(['SC-003', 'SC-004'])
     expect(diff.added).toEqual([{ id: 'SC-007', title: 'title SC-007', head: 'Pass' }])
     expect(diff.missing).toEqual([{ id: 'SC-006', title: 'title SC-006', base: 'Pass' }])
-    expect(diff.stillFailing).toEqual([{ id: 'SC-005', title: 'title SC-005', base: 'Fail', head: 'Unable to Verify' }])
+    expect(diff.stillFailing).toEqual([])
+    expect(diff.stillUnverified).toEqual([{ id: 'SC-005', title: 'title SC-005', base: 'Fail', head: 'Unable to Verify' }])
     expect(diff.stillPassing).toBe(0)
     expect(diff.delta).toEqual({ pass: 0, fail: -1, unverifiable: 1, passRate: 0.25, credits: 2.5 })
     expect(deltaLine(diff)).toBe('Pass 0 · Fail -1 · Unable to Verify +1 · pass rate 50% → 75% (+25 pts) · credits +2.5')
@@ -127,7 +128,7 @@ describe('/rook compare and the compare tool', () => {
     const ran = (await $.tool.call({ tool: 'mcp__rook__compare', base: NEW_RUN, head: OLD_RUN } as never)) as Ran
 
     expect(asText(ran)).toContain('Regressed (Pass → Fail or Unable to Verify) (1):\n  SC-002')
-    expect(asText(ran)).toContain('Missing from head (1):\n  SC-007')
+    expect(asText(ran)).toContain('Not re-run in head (1):\n  SC-007')
     expect(world.invocations.length).toBe(before)
 
     expect(asText((await $.tool.call({ tool: 'mcp__rook__compare' } as never)) as Ran)).toContain(`head ${NEW_RUN}`)
