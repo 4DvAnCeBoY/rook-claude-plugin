@@ -7,7 +7,7 @@ This guide covers the two situations you will be in:
 
 [![Walkthrough video: every stage in one Claude Code session](media/walkthrough-poster.png)](media/rook-plugin-walkthrough.mp4)
 
-*[Watch the setup walkthrough](media/rook-plugin-walkthrough.mp4) (Case A, from an empty repository to a fix), and [v0.2 in 4 minutes](media/rook-plugin-v2-walkthrough.mp4) (Case B: the tabs, a confirmed run, the verdict card, the re-test bar, Cancel, budget and CI).*
+*[Watch the setup walkthrough](media/rook-plugin-walkthrough.mp4) (Case A, from an empty repository to a fix), [v0.2 in 4 minutes](media/rook-plugin-v2-walkthrough.mp4), and [v0.3 in 6 minutes](media/rook-plugin-v3-walkthrough.mp4) (the side pane for QEs and developers: every case, live) (Case B: the tabs, a confirmed run, the verdict card, the re-test bar, Cancel, budget and CI).*
 
 ## Before either case
 

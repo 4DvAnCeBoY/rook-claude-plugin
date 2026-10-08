@@ -1,4 +1,4 @@
-import type { RookRunSummary, RookRunView } from '../../types'
+import type { RookRunSummary, RookRunView, RookStatus } from '../../types'
 import { credits, duration } from '../format'
 import { deltaLine, pct } from '../history'
 import type { RunDiff, RunDiffRow } from '../history'
@@ -21,7 +21,31 @@ export type RunsTabProps = {
   onCompareWith: () => void
   onPick: (runId: string) => void
   onClearCompare: () => void
+  /** The opened run against the finished run before it: who regressed, who was fixed. */
+  versus?: { previous: string; regressed: string[]; fixed: string[] } | null
+  /** Open one scenario of the opened run in the drill-down. */
+  onScenario?: (id: string) => void
 }
+
+const ICON: Record<RookStatus, { glyph: string; color: string }> = {
+  Pass: { glyph: '✓', color: 'green' },
+  Fail: { glyph: '✗', color: 'red' },
+  'Unable to Verify': { glyph: '?', color: 'yellow' },
+}
+
+/** A scenario row of a run's detail: `✗ SC-004 Manager-approval override…`. */
+export const scenarioLine = (row: { id: string; title: string; status: RookStatus }): string => `${ICON[row.status].glyph} ${row.id}${row.title ? ` ${row.title}` : ''}`
+
+/** `vs each scenario's verdict before: regressed SC-002 · fixed SC-004`, or that nothing moved. */
+export const versusLine = (versus: { regressed: readonly string[]; fixed: readonly string[] }): string =>
+  versus.regressed.length === 0 && versus.fixed.length === 0
+    ? "vs each scenario's verdict before: none regressed or was fixed"
+    : `vs each scenario's verdict before: ${[
+        versus.regressed.length > 0 ? `regressed ${versus.regressed.join(', ')}` : undefined,
+        versus.fixed.length > 0 ? `fixed ${versus.fixed.join(', ')}` : undefined,
+      ]
+        .filter(Boolean)
+        .join(' · ')}`
 
 /** `2026-09-28 15:49` from rook's ISO `created`; the run id's own date when there is none. */
 const when = (run: RookRunSummary): string => {
@@ -128,19 +152,42 @@ function RunDetail(props: RunsTabProps & { run: RookRunView }) {
         {run.clusters.length} cluster{run.clusters.length === 1 ? '' : 's'}
         {run.clusters.some(cluster => cluster.remedy !== undefined) ? ' (explained)' : ''}
       </Text>
+      {props.versus !== undefined && props.versus !== null && props.versus.previous !== run.runId && (
+        <Box key="run-versus">
+          <Text wrap="wrap">
+            {versusLine(props.versus)}
+          </Text>
+        </Box>
+      )}
       <Box flexDirection="row" gap={1}>
-        <Button key="run-report" label="Report to Claude" onPress={props.onReport} />
+        <Button key="run-report" label="Report to Claude" hotkey="s" onPress={props.onReport} />
         {canExplain &&
           (props.explaining === run.runId ? (
             <Text key="run-explaining" color="cyan">
               explaining…
             </Text>
           ) : (
-            <Button key="run-explain" label="Explain with rca" onPress={props.onExplain} />
+            <Button key="run-explain" label="Explain with rca" hotkey="w" onPress={props.onExplain} />
           ))}
-        <Button key="run-compare" label="Compare with…" onPress={props.onCompareWith} />
-        <Button key="run-back" plain label="Back" role="dismiss" onPress={props.onBack} />
+        <Button key="run-compare" label="Compare with…" hotkey="m" onPress={props.onCompareWith} />
+        <Button key="run-back" plain label="Back" hotkey="b" role="dismiss" onPress={props.onBack} />
       </Box>
+      {run.rows.length > 0 && (
+        <Box key="run-scenarios" flexDirection="column">
+          <Text dimColor>
+            {run.rows.length} scenario{run.rows.length === 1 ? '' : 's'} judged · open one for its evidence
+          </Text>
+          {run.rows.map(row =>
+            props.onScenario === undefined ? (
+              <Text key={`run-sc-${row.id}`} color={ICON[row.status].color} wrap="truncate-end">
+                {scenarioLine(row)}
+              </Text>
+            ) : (
+              <Button key={`run-sc-${row.id}`} plain label={scenarioLine(row)} onPress={() => props.onScenario!(row.id)} />
+            ),
+          )}
+        </Box>
+      )}
     </Box>
   )
 }

@@ -146,6 +146,19 @@ export function rowOf(scenarioId: string, verdictText: string, title: string | u
 
       return evidence === undefined ? [] : [`${str(criterion.criterion_id) ?? '?'}: ${evidence}`]
     })
+  const weakPasses = criteria
+    .filter(criterion => str(criterion.status) === 'Pass' && str(criterion.confidence) === 'Low')
+    .map(criterion => str(criterion.criterion_id) ?? '?')
+  const forbiddenHits = list(verdict.forbidden_hits).flatMap(hit => {
+    const text = typeof hit === 'string' ? hit : isMap(hit) ? (str(hit.pattern) ?? str(hit.text) ?? str(hit.match)) : undefined
+
+    return text === undefined ? [] : [text]
+  })
+  const usage = isMap(verdict.usage) ? verdict.usage : undefined
+  const compliance = num(verdict.compliance_percentage)
+  const latencyMs = num(verdict.latency_ms)
+  const turns = num(verdict.turns)
+  const tokens = usage === undefined ? undefined : { input: num(usage.input_tokens) ?? 0, output: num(usage.output_tokens) ?? 0 }
 
   return {
     id: scenarioId,
@@ -157,6 +170,12 @@ export function rowOf(scenarioId: string, verdictText: string, title: string | u
     compromised: verdict.compromised === true,
     summary: str(verdict.summary) ?? '',
     failing,
+    ...(compliance !== undefined && { compliance }),
+    ...(forbiddenHits.length > 0 && { forbiddenHits }),
+    ...(weakPasses.length > 0 && { weakPasses }),
+    ...(latencyMs !== undefined && { latencyMs }),
+    ...(turns !== undefined && { turns }),
+    ...(tokens !== undefined && { tokens }),
   }
 }
 

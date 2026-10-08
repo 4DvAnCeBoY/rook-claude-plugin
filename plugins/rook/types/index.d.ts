@@ -23,6 +23,103 @@ export type RookScenarioRow = {
   compromised: boolean
   summary: string
   failing: RookFailingCriterion[]
+  /** verdict.yaml `compliance_percentage`: the share of criteria that passed. */
+  compliance?: number
+  /** verdict.yaml `forbidden_hits`: patterns the scenario forbids that appeared anyway. */
+  forbiddenHits?: string[]
+  /** Criterion ids that passed with Low confidence: a pass to check, not to trust. */
+  weakPasses?: string[]
+  latencyMs?: number
+  turns?: number
+  tokens?: { input: number; output: number }
+}
+
+/** Who acts on a scenario's verdict (hooks/owner.ts). */
+export type RookOwner =
+  /** The agent did the wrong thing: hooks ran, it replied, the judge failed it with confidence. */
+  | 'agent'
+  /** The scenario asks for something this environment cannot give, or has never passed. */
+  | 'scenario'
+  /** A profile hook failed or no reply was recorded: the agent was not really tested. */
+  | 'harness'
+  /** The judge could not check, or failed it only with Low confidence. */
+  | 'judge'
+  /** Pass, but a forbidden pattern appeared, a criterion passed weakly, or compliance is under 100. */
+  | 'passbut'
+  | 'pass'
+
+/** Who is looking: the pane leads with release readiness for a QE, with the effect of their change for a developer. */
+export type RookLens = 'qe' | 'dev'
+
+/** verdict.yaml `confidence`: rook writes High, Medium or Low. */
+export type RookConfidence = 'High' | 'Medium' | 'Low'
+
+/** One acceptance criterion as judged, passes included. */
+export type RookCriterion = {
+  id: string
+  criterion: string
+  status: RookStatus
+  expected: string
+  achieved: string
+  evidence: string
+  confidence?: RookConfidence
+}
+
+/** One profile hook of a scenario, from hooks.json. `prepare` and `judge` appear only when rook records them. */
+export type RookPhase = {
+  name: string
+  ran: boolean
+  ok: boolean
+  durationMs?: number
+  error?: string
+  /** Tool calls the hook observed (execute's `data.calls`). */
+  calls?: { name: string; arguments?: unknown }[]
+}
+
+/** One turn of the conversation rook had with the agent (response.json `transcript`). */
+export type RookTurn = {
+  role: 'user' | 'agent' | string
+  content: string
+  /** The judge quoted this turn as evidence of a failing or unchecked criterion. */
+  isCited?: boolean
+}
+
+/** Everything one scenario's run left on disk, for the drill-down. Read on demand, never per poll. */
+export type RookEvidence = {
+  id: string
+  runId: string
+  title: string
+  status: RookStatus
+  goal?: string
+  /** snapshot.yaml `why`: the failure the scenario is meant to catch. */
+  why?: string
+  featureId?: string
+  criteria: RookCriterion[]
+  phases: RookPhase[]
+  transcript: RookTurn[]
+  /** The agent's final reply. */
+  output?: string
+  toolCalls: { name: string; arguments?: unknown }[]
+  summary: string
+  gaps: string[]
+  compliance?: number
+  forbiddenHits: string[]
+  latencyMs?: number
+  turns?: number
+  tokens?: { input: number; output: number }
+  /** Paths, relative to the workspace, a prompt can point Claude at. */
+  paths: { verdict: string; response?: string; hooks?: string; request?: string }
+}
+
+/** A scenario's verdict in each of the newest runs that judged it, oldest first. */
+export type RookVerdictHistory = { id: string; runs: { runId: string; status: RookStatus }[] }
+
+/** What a scan of a repository with no `.testmuai/rook/` found that rook can start from. */
+export type RookRepoFound = {
+  path: string
+  kind: 'agent' | 'requirements' | 'connection' | 'ci'
+  /** A short description: `an agent: OpenAI Agents SDK`, `requirements: 9 headings`. */
+  what: string
 }
 
 /**
@@ -117,6 +214,10 @@ export type RookSnapshot = {
   elsewhere?: { project: string; runs: number }[]
   checkedAt: number
   readiness?: RookReadiness
+  /** Outside a rook workspace: what the repository holds that rook could start from (feature: keys and setup). */
+  repoFound?: RookRepoFound[]
+  /** The active profile's variables with no value in rook's env store for this directory. Names only, never values. */
+  unsetVariables?: string[]
 }
 
 export type RookStale = {
@@ -140,8 +241,8 @@ export type RookRunning = {
 
 export type RookProdConfirmation = { cwd: string; profile: string; until: number }
 
-/** The pane's tabs. */
-export type RookTab = 'health' | 'runs' | 'scenarios' | 'setup'
+/** The pane's tabs. `health` is labelled Release for a QE and My change for a developer. */
+export type RookTab = 'health' | 'runs' | 'scenarios' | 'setup' | 'trends'
 
 /**
  * Something that spends credits, waiting for the person's yes in the pane.
@@ -153,6 +254,8 @@ export type RookConfirm =
   /** Re-run one scenario `times` times in a row (flaky check). */
   | { action: 'flaky'; id: string; times: number; label: string; credits?: number }
   | { action: 'profile-test'; profile?: string; label: string; credits?: number }
+  /** `rook explore .` from the guided start (feature: keys): reads the code, writes the agent's features. */
+  | { action: 'explore'; instruction?: string; label: string; credits?: number }
 
 /** One step of a generate or explore in flight: a feature being planned, a scenario being written. */
 export type RookJobLane = { id: string; label: string; phase: string; since: number; planned?: number; done?: number }
@@ -284,6 +387,51 @@ declare module 'claude-code' {
 
       // ── feature: ci
       // ── end feature: ci
+
+      // ── shared: lens and drill-down
+      /** Who is looking; persisted in $.store, toggled with `l` in the pane. */
+      lens: RookLens
+      /** The scenario the drill-down shows: its run and id. Opened from any list in any tab. */
+      detail: { runId: string; id: string } | null
+      /** The drill-down's evidence, read when `detail` changes. */
+      evidence: RookEvidence | null
+      /** Each scenario's newest verdicts across runs (hooks/history.ts `verdictHistory`), re-read when runs change. */
+      verdicts: RookVerdictHistory[]
+      // ── end shared: lens and drill-down
+
+      // ── feature: drill-down (scenario evidence, owner actions, prompts)
+      // ── end feature: drill-down
+
+      // ── feature: home (Release for QE, My change for dev)
+      // ── end feature: home
+
+      // ── feature: trends (heat grid, runs per scenario)
+      /** The Runs tab's opened run against the finished run before it (hooks/trends.ts `versusPrevious`). */
+      runVersus: { runId: string; previous: string; regressed: string[]; fixed: string[] } | null
+      // ── end feature: trends
+
+      // ── feature: live (run band, streamed results, stale verdicts, status line states)
+      /** The run in flight and the one that just landed: whose it is, its verdicts' arrival order, new failures of a run from elsewhere (hooks/live.ts). */
+      live: {
+        agentId?: string
+        /** The newest run accounted for: a run landing with another id is news. */
+        known?: string
+        /** Runs seen in flight while this session had one running. */
+        own: string[]
+        isOwnActive?: boolean
+        /** Until when a landing still counts as this session's run (ms), after `running` cleared. */
+        ownGrace?: number
+        /** The run in flight's verdicts in the order they arrived, newest first. */
+        judged?: { runId: string; ids: string[] }
+        /** The newest run this session saw land, and when. */
+        landed?: { runId: string; at: number; isOwn: boolean }
+        /** A run started elsewhere landed with scenarios that passed before: shown until dismissed. */
+        newFail?: { runId: string; rows: { id: string; title: string; status: RookStatus }[] }
+      } | null
+      // ── end feature: live
+
+      // ── feature: keys (focus, hotkeys, fresh repo, setup toggles)
+      // ── end feature: keys
     }
   }
 }

@@ -1,9 +1,14 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
-import type { RookRunView, RookSnapshot, RookStale } from '../types'
+import type { RookRunView, RookScenarioRow, RookSnapshot, RookStale, RookVerdictHistory } from '../types'
 import { statusLine } from '../hooks/format'
 import {
+  agoText,
+  flakyIds,
+  greenRun,
+  idsText,
+  tokenDelta,
   budgetText,
   composeStatus,
   editedPart,
@@ -14,7 +19,7 @@ import {
   jobText,
   msPerScenario,
   sparkline,
-  trendOf,
+  recentRuns,
   trendText,
 } from '../hooks/statusline'
 import type { StatusInput, TrendPoint } from '../hooks/statusline'
@@ -96,10 +101,10 @@ describe('status line · trend', () => {
   })
 
   test('beside the score, before the gaps', () => {
-    expect(composeStatus(input({ trend: points(0.3, 0.6, 0.8) }))).toBe('✓4 ✗0 ?3 ▃▅▇')
+    expect(composeStatus(input({ trend: points(0.3, 0.6, 0.8) }))).toBe('✓4 ✗0 ?3 57% ▃▅▇')
   })
 
-  test('trendOf: finished, non-test runs from disk, oldest first', async () => {
+  test('recentRuns: finished, non-test runs from disk, oldest first', async () => {
     const fresh = '2026-09-29T09-00-00Z'
     const test = '2026-09-29T10-00-00Z'
     const files = workspace({
@@ -109,7 +114,7 @@ describe('status line · trend', () => {
       [`${AGENT_DIR}/runs/${test}/report.yaml`]: reportYaml(test, 0, 1, 0, 0),
     })
     const io = ioOver(files)
-    const trend = await trendOf(io, AGENT_DIR, await runIds(io, AGENT_DIR))
+    const trend = await recentRuns(io, AGENT_DIR, await runIds(io, AGENT_DIR))
 
     expect(trend.map(point => [point.passRate, point.executed, point.credits, point.durationMs])).toEqual([
       [0, 2, 3, 64_000],
@@ -117,7 +122,7 @@ describe('status line · trend', () => {
       [1, 1, 2, 64_000],
     ])
     expect(trendText(trend)).toBe('▁▅█')
-    expect(await trendOf(io, AGENT_DIR, await runIds(io, AGENT_DIR), 2)).toHaveLength(2)
+    expect(await recentRuns(io, AGENT_DIR, await runIds(io, AGENT_DIR), 2)).toHaveLength(2)
   })
 })
 
@@ -149,7 +154,7 @@ describe('status line · ETA', () => {
     expect(etaText(80_000)).toBe('~1m left')
     expect(etaText(5 * 60_000)).toBe('~5m left')
     expect(etaText(80 * 60_000)).toBe('~1h20m left')
-    expect(composeStatus(input({ snapshot: snap(inflight), trend: points(1, 1) }))).toBe('▸ 1/7 · SC-006 judging · ~3m left · ✓4 ✗0 ?3')
+    expect(composeStatus(input({ snapshot: snap(inflight), trend: points(1, 1) }))).toBe('◐ elsewhere 1/7 · SC-006 judging · ETA ~3m')
   })
 })
 
@@ -157,7 +162,7 @@ describe('status line · markers', () => {
   test('an untested edit names the file when there is room', () => {
     expect(editedPart(STALE)).toEqual({ text: '⚠ edited tools.mjs', short: '⚠ edited', rank: 2 })
     expect(editedPart({ ...STALE, files: ['src/a.ts', 'b.ts'] }).text).toBe('⚠ edited a.ts +1')
-    expect(composeStatus(input({ stale: STALE }))).toBe('✓4 ✗0 ?3 · ⚠ edited tools.mjs')
+    expect(composeStatus(input({ stale: STALE }))).toBe('✓4 ✗0 ?3 57% · ⚠ edited tools.mjs')
   })
 
   test('low credits: below one full run of every scenario at the latest rate', () => {
@@ -171,12 +176,12 @@ describe('status line · markers', () => {
     expect(isLowCredits(13, snap(run({ finished: false, done: 1 })), [])).toBe(false)
     // never-run scenarios count too
     expect(isLowCredits(15, snap(run(), { neverRun: 1 }), [])).toBe(true)
-    expect(composeStatus(input({ balance: 3 }))).toBe('✓4 ✗0 ?3 · low credits')
+    expect(composeStatus(input({ balance: 3 }))).toBe('✓4 ✗0 ?3 57% · low credits')
   })
 
   test('budget', () => {
     expect(budgetText({ limit: 500, spent: 120.4 })).toBe('120/500 cr')
-    expect(composeStatus(input({ budget: { limit: 500, spent: 120 } }))).toBe('✓4 ✗0 ?3 · 120/500 cr')
+    expect(composeStatus(input({ budget: { limit: 500, spent: 120 } }))).toBe('✓4 ✗0 ?3 57% · 120/500 cr')
   })
 
   test('a generate or explore in flight leads the line', () => {
@@ -184,7 +189,7 @@ describe('status line · markers', () => {
 
     expect(jobText(job, 1_000_000)).toBe('▸ generate · 3/7 · 2m10s')
     expect(jobText({ ...job, kind: 'explore', done: undefined, planned: undefined }, 1_000_000)).toBe('▸ explore · 2m10s')
-    expect(composeStatus(input({ job }))).toBe('▸ generate · 3/7 · 2m10s · ✓4 ✗0 ?3')
+    expect(composeStatus(input({ job }))).toBe('▸ generate · 3/7 · 2m10s · ✓4 ✗0 ?3 57%')
     // outside a workspace a job still shows; markers do not
     expect(composeStatus(input({ snapshot: null, job, budget: { limit: 5, spent: 1 } }))).toBe('▸ generate · 3/7 · 2m10s')
   })
@@ -194,10 +199,10 @@ describe('status line · markers', () => {
     expect(composeStatus(input({ snapshot: null, setup: 'setup: install rook' }))).toBe('setup: install rook')
   })
 
-  test('the score alone reads as before', () => {
+  test('idle, the score leads as it did, with the pass rate beside it', () => {
     const snapshot = snap(run())
 
-    expect(composeStatus(input({ snapshot }))).toBe(statusLine(snapshot, false))
+    expect(composeStatus(input({ snapshot }))).toBe(`${statusLine(snapshot, false)} 57%`)
   })
 })
 
@@ -213,31 +218,33 @@ describe('status line · fitting the width', () => {
 
   test('everything fits on a wide line', () => {
     expect(composeStatus({ ...everything, max: 200 })).toBe(
-      '▸ generate · 3/7 · 2m10s · ✓4 ✗0 ?3 ▃▅▇ · 1 gap · ⚠ edited agent-tools-and-guardrails.mjs · low credits · 120/500 cr',
+      '▸ generate · 3/7 · 2m10s · ✓4 ✗0 ?3 57% ▃▅▇ · ⚠ edited agent-tools-and-guardrails.mjs · low credits · 120/500 cr',
     )
   })
 
-  test('shortens the file name first, then drops gaps, trend, budget, low credits, edited, job', () => {
+  test('shortens the file name first, then drops parts right to left: budget, low credits, edited, trend, rate, job', () => {
     const at = (max: number) => composeStatus({ ...everything, max })
 
-    expect(at(100)).toBe('▸ generate · 3/7 · 2m10s · ✓4 ✗0 ?3 ▃▅▇ · 1 gap · ⚠ edited · low credits · 120/500 cr')
-    expect(at(80)).toBe('▸ generate · 3/7 · 2m10s · ✓4 ✗0 ?3 ▃▅▇ · ⚠ edited · low credits · 120/500 cr')
-    expect(at(73)).toBe('▸ generate · 3/7 · 2m10s · ✓4 ✗0 ?3 · ⚠ edited · low credits · 120/500 cr')
-    expect(at(72)).toBe('▸ generate · 3/7 · 2m10s · ✓4 ✗0 ?3 · ⚠ edited · low credits')
-    expect(at(48)).toBe('▸ generate · 3/7 · 2m10s · ✓4 ✗0 ?3 · ⚠ edited')
-    expect(at(40)).toBe('▸ generate · 3/7 · 2m10s · ✓4 ✗0 ?3')
+    expect(at(100)).toBe('▸ generate · 3/7 · 2m10s · ✓4 ✗0 ?3 57% ▃▅▇ · ⚠ edited · low credits · 120/500 cr')
+    expect(at(80)).toBe('▸ generate · 3/7 · 2m10s · ✓4 ✗0 ?3 57% ▃▅▇ · ⚠ edited · low credits')
+    expect(at(67)).toBe('▸ generate · 3/7 · 2m10s · ✓4 ✗0 ?3 57% ▃▅▇ · ⚠ edited')
+    expect(at(53)).toBe('▸ generate · 3/7 · 2m10s · ✓4 ✗0 ?3 57% ▃▅▇')
+    expect(at(42)).toBe('▸ generate · 3/7 · 2m10s · ✓4 ✗0 ?3 57%')
+    expect(at(38)).toBe('▸ generate · 3/7 · 2m10s · ✓4 ✗0 ?3')
     expect(at(20)).toBe('✓4 ✗0 ?3') // rank 0 stays, however narrow
     expect(composeStatus(everything)!.length).toBeLessThanOrEqual(72)
   })
 
-  test('while running: the lane goes before the ETA, the progress and counts stay', () => {
-    const inflight = run({ finished: false, done: 5, planned: 7, lanes: [{ id: 'SC-006', title: 't', phase: 'judging', since: 0 }] })
+  test('while running: the marker, then the source, the ETA and the lane go; the progress and failures stay', () => {
+    const inflight = run({ finished: false, done: 5, planned: 7, counts: { pass: 3, fail: 2, unverifiable: 0 }, lanes: [{ id: 'SC-006', title: 't', phase: 'judging', since: 0 }] })
     const at = (max: number) => composeStatus(input({ snapshot: snap(inflight), trend: points(1, 1), stale: STALE, max }))
 
-    expect(at(80)).toBe('▸ 5/7 · SC-006 judging · ~1m left · ✓4 ✗0 ?3 · ⚠ edited tools.mjs')
-    expect(at(48)).toBe('▸ 5/7 · ~1m left · ✓4 ✗0 ?3 · ⚠ edited tools.mjs')
-    expect(at(37)).toBe('▸ 5/7 · ✓4 ✗0 ?3 · ⚠ edited tools.mjs') // the drop left room for the name again
-    expect(at(36)).toBe('▸ 5/7 · ✓4 ✗0 ?3 · ⚠ edited')
+    expect(at(80)).toBe('◐ elsewhere 5/7 ✗2 · SC-006 judging · ETA ~1m · ⚠ edited tools.mjs')
+    expect(at(60)).toBe('◐ elsewhere 5/7 ✗2 · SC-006 judging · ETA ~1m · ⚠ edited')
+    expect(at(45)).toBe('◐ elsewhere 5/7 ✗2 · SC-006 judging · ETA ~1m')
+    expect(at(35)).toBe('◐ 5/7 ✗2 · SC-006 judging · ETA ~1m')
+    expect(at(30)).toBe('◐ 5/7 ✗2 · SC-006 judging')
+    expect(at(20)).toBe('◐ 5/7 ✗2')
   })
 
   test('fitParts keeps the order and glue', () => {
@@ -267,14 +274,14 @@ describe('status line · in a session', () => {
   test('three runs on disk draw a trend', async ($, on) => {
     const { world } = await start($, on, workspace(third))
 
-    expect(world.statuses.at(-1)).toMatch(/^✓\d ✗\d \?\d ▁▅█/)
+    expect(world.statuses.at(-1)).toMatch(/^✓\d ✗\d \?\d \d+% ▁▅█/)
   })
 
   test('an edit to the agent marks the line at once; the next finished run clears it', async ($, on) => {
     const { world, clock } = await start($, on, workspace())
 
     await $.tool.call({ tool: 'Edit', file_path: '/work/src/tools.mjs', old_string: 'a', new_string: 'b' } as never)
-    expect(world.statuses.at(-1)).toBe('✓1 ✗1 ?1 · 2 gaps · ↑1 fixed · ⚠ edited tools.mjs')
+    expect(world.statuses.at(-1)).toBe('✓1 ✗1 ?1 33% · 1 blocker · ⚠ edited tools.mjs')
 
     for (const [path, text] of Object.entries(third)) {
       world.files.set(path, text)
@@ -290,17 +297,158 @@ describe('status line · in a session', () => {
     world.plan = { stdout: JSON.stringify({ username: 'dev', subscription: 'Team', credits: 5 }), code: 0 }
     on('tool.call', () => ({ result: 'ok' }) as never)
     await $.session.start(SESSION)
-    expect(world.statuses.at(-1)).toBe('✓1 ✗1 ?1 · 2 gaps · ↑1 fixed')
+    expect(world.statuses.at(-1)).toBe('✓1 ✗1 ?1 33% · 1 blocker')
 
     // the balance is fetched just after start, and the line follows it at once
     await clock.advance(10)
-    expect(world.statuses.at(-1)).toBe('✓1 ✗1 ?1 · 2 gaps · ↑1 fixed · low credits')
+    expect(world.statuses.at(-1)).toBe('✓1 ✗1 ?1 33% · 1 blocker · low credits')
   })
 
   test("a run in flight estimates what is left from earlier runs' pace", async ($, on) => {
     const { world } = await start($, on, inFlight())
 
     // the baseline took 64s for two scenarios: one left is about half a minute
-    expect(world.statuses.at(-1)).toBe('▸ 2/3 · SC-007 starting · <1m left · ✓1 ✗1 ?0')
+    expect(world.statuses.at(-1)).toBe('◐ elsewhere 2/3 ✗1 · SC-007 starting · ETA <1m')
+  })
+})
+
+describe('status line · states by priority', () => {
+  const R0 = '2026-10-01T09-00-00Z'
+  const R1 = '2026-10-01T10-00-00Z'
+  const NOW = Date.parse('2026-10-01T11:00:00Z')
+
+  const row = (id: string, status: RookScenarioRow['status'], over: Partial<RookScenarioRow> = {}): RookScenarioRow => ({
+    id,
+    title: id,
+    status,
+    gaps: [],
+    unchecked: [],
+    compromised: false,
+    summary: '',
+    failing: status === 'Fail' ? [{ id: 'C1', criterion: 'c', expected: 'e', achieved: 'a', evidence: '' }] : [],
+    ...over,
+  })
+
+  test('fresh repository: not set up, the next step, what was found; nothing found stays silent', () => {
+    const snapshot: RookSnapshot = {
+      current: [],
+      neverRun: 0,
+      checkedAt: 0,
+      readiness: {
+        steps: [
+          { id: 'installed', label: '', ok: true },
+          { id: 'signed_in', label: '', ok: true },
+          { id: 'project', label: '', ok: false },
+        ],
+        hasWorkspace: false,
+      },
+      repoFound: [
+        { path: 'agent.py', kind: 'agent', what: 'an agent' },
+        { path: 'docs/req.md', kind: 'requirements', what: 'requirements' },
+        { path: 'b.py', kind: 'agent', what: 'an agent' },
+      ],
+    }
+
+    expect(composeStatus(input({ snapshot }))).toBe('not set up · next: select a project · found agent, requirements')
+    expect(composeStatus(input({ snapshot: { ...snapshot, repoFound: [] } }))).toBeUndefined()
+  })
+
+  test('workspace never run: how many, and the setup step or the first run with its price', () => {
+    const snapshot: RookSnapshot = { agentId: 'a', current: [], neverRun: 5, checkedAt: 0 }
+
+    expect(composeStatus(input({ snapshot }))).toBe('5 scenarios · never run · next: first run')
+    expect(composeStatus(input({ snapshot, trend: points(1) }))).toBe('5 scenarios · never run · next: first run ~10cr')
+    expect(composeStatus(input({ snapshot, setup: 'setup: add a profile' }))).toBe('5 scenarios · never run · next: add a profile')
+  })
+
+  test('running: the source, progress, failures, the lane with its time, the ETA', () => {
+    const inflight = run({
+      runId: R1,
+      finished: false,
+      done: 2,
+      planned: 7,
+      counts: { pass: 1, fail: 1, unverifiable: 0 },
+      lanes: [{ id: 'SC-006', title: 't', phase: 'execute', since: NOW - 12_000 }],
+    })
+    const running = { startedAt: NOW - 60_000, label: 'all', source: 'pane' as const }
+
+    expect(composeStatus(input({ snapshot: snap(inflight), running, now: NOW }))).toBe('◐ 2/7 ✗1 · SC-006 execute 12s · ETA ~3m')
+    expect(composeStatus(input({ snapshot: snap(inflight), running: { ...running, source: 'tool' }, now: NOW }))).toContain('◐ Claude 2/7')
+    // started, nothing on disk yet
+    expect(composeStatus(input({ snapshot: snap(run()), running, now: NOW }))).toBe('◐ starting')
+  })
+
+  test('a setup blocker wins over a run that just landed', () => {
+    const live = { own: [], landed: { runId: R1, at: NOW - 60_000, isOwn: false } }
+
+    expect(composeStatus(input({ snapshot: snap(run({ runId: R1 })), live, setup: 'setup: sign in', now: NOW }))).toBe('✓4 ✗0 ?3 · setup: sign in')
+  })
+
+  test('just finished: the run, how long ago, fixed, still failing and new failures; idle again after ten minutes', () => {
+    const landed = run({ runId: R1, counts: { pass: 1, fail: 2, unverifiable: 0 }, rows: [row('SC-001', 'Pass'), row('SC-002', 'Fail'), row('SC-003', 'Fail')] })
+    const snapshot = snap(landed, {
+      current: [
+        { id: 'SC-001', title: '', status: 'Pass', runId: R1, was: 'Fail' },
+        { id: 'SC-002', title: '', status: 'Fail', runId: R1, was: 'Pass' },
+        { id: 'SC-003', title: '', status: 'Fail', runId: R1, was: 'Fail' },
+      ],
+    })
+    const live = { own: [], landed: { runId: R1, at: NOW - 180_000, isOwn: false } }
+
+    expect(composeStatus(input({ snapshot, live, now: NOW }))).toBe('✗ 1/3 3m ago · fixed SC-001 · ✗ SC-003 · new ✗ SC-002')
+    // too long: fixed goes first, the new failure stays
+    expect(composeStatus(input({ snapshot, live, now: NOW, max: 32 }))).toBe('✗ 1/3 3m ago · new ✗ SC-002')
+    expect(composeStatus(input({ snapshot, live, now: NOW + 8 * 60_000 }))).toBe('✓1 ✗2 ?0 33%')
+  })
+
+  const verdicts: RookVerdictHistory[] = [
+    { id: 'SC-001', runs: [{ runId: '2026-09-30T10-00-00Z', status: 'Fail' }, { runId: R0, status: 'Pass' }, { runId: R1, status: 'Pass' }] },
+    { id: 'SC-003', runs: [{ runId: R0, status: 'Pass' }, { runId: R1, status: 'Fail' }] },
+  ]
+
+  test('idle for a QE: score, pass rate, trusted rate, trend, blockers, flaky', () => {
+    const rows = new Map<string, RookScenarioRow>([
+      [`${R1}/SC-001`, row('SC-001', 'Pass')],
+      [`${R1}/SC-002`, row('SC-002', 'Pass', { weakPasses: ['C2'] })],
+      [`${R1}/SC-003`, row('SC-003', 'Fail')],
+      [`${R1}/SC-004`, row('SC-004', 'Unable to Verify')],
+    ])
+    const snapshot = snap(run({ runId: R1 }), { current: [...rows.values()].map(r => ({ id: r.id, title: '', status: r.status, runId: R1 })) })
+    const flaky: RookVerdictHistory[] = [{ id: 'SC-002', runs: [{ runId: 'x1', status: 'Pass' }, { runId: 'x2', status: 'Fail' }, { runId: R1, status: 'Pass' }] }, ...verdicts]
+
+    expect(composeStatus(input({ snapshot, trend: points(0.3, 0.6, 0.8), verdicts: flaky, rowAt: (runId, id) => rows.get(`${runId}/${id}`) }))).toBe(
+      '✓2 ✗1 ?1 50% (25% trusted) ▃▅▇ · 1 blocker · 1 flaky',
+    )
+    expect(flakyIds(flaky)).toEqual(['SC-002'])
+  })
+
+  test('idle for a developer: regressed since green, files changed since, stale, tokens', () => {
+    const rows = new Map<string, RookScenarioRow>([
+      [`${R0}/SC-003`, row('SC-003', 'Pass', { tokens: { input: 80, output: 20 } })],
+      [`${R1}/SC-003`, row('SC-003', 'Fail', { tokens: { input: 90, output: 20 } })],
+    ])
+    const latest = run({ runId: R1, rows: [rows.get(`${R1}/SC-003`)!] })
+    const snapshot = snap(latest, {
+      current: [
+        { id: 'SC-001', title: '', status: 'Pass', runId: R1 },
+        { id: 'SC-003', title: '', status: 'Fail', runId: R1, was: 'Pass' },
+      ],
+    })
+    const stamps = new Map([
+      ['src/a.ts', Date.parse('2026-10-01T09:30:00Z')],
+      ['src/b.ts', Date.parse('2026-10-01T08:00:00Z')],
+    ])
+    const stale: RookStale = { files: ['src/a.ts'], scenarios: [{ id: 'SC-001', title: '' }, { id: 'SC-003', title: '' }], isWholeAgent: false, since: 0 }
+    const rowAt = (runId: string, id: string) => rows.get(`${runId}/${id}`)
+
+    expect(greenRun(verdicts)).toBe(R0)
+    expect(tokenDelta(latest, verdicts, rowAt)).toBe(10)
+    expect(composeStatus(input({ snapshot, lens: 'dev', verdicts, stamps, stale, rowAt }))).toBe('✓1 ✗1 ?0 · 1 regressed since green · Δ1 file · 2 stale · tokens +10%')
+  })
+
+  test('helpers: ids, ago', () => {
+    expect(idsText(['SC-1', 'SC-2', 'SC-3', 'SC-4'])).toBe('SC-1,SC-2 +2')
+    expect(agoText(30_000)).toBe('<1m ago')
+    expect(agoText(65 * 60_000)).toBe('1h05m ago')
   })
 })

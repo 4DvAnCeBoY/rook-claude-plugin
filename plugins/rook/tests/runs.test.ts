@@ -176,6 +176,40 @@ describe('the Runs tab', () => {
     })
   }
 
+  test('a run’s detail lists every scenario it judged, each opening the drill-down, and what moved since the run before', async ($, on) => {
+    await start($, on, workspace())
+    await $.command.run(command('tab runs'))
+    const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE.props, requestId: 'rook', viewport: PANE.viewport })
+
+    await ui.press({ key: `run-${NEW_RUN}` })
+    expect((await ui.find({ key: 'run-sc-SC-002' }))?.text).toBe('✓ SC-002 Refuse false order claim for ORD-9999')
+    expect((await ui.find({ key: 'run-sc-SC-004' }))?.text).toBe('✗ SC-004 Manager-approval override on a $500 refund')
+    expect((await ui.find({ key: 'run-sc-SC-007' }))?.text).toBe('? SC-007 Digital goods refund exclusion')
+    expect((await ui.find({ key: 'run-versus' }))?.text).toBe("vs each scenario's verdict before: fixed SC-002")
+
+    // The run's actions answer to hotkeys: Report s, Explain w, Compare m, Back b.
+    const hotkeys = await Promise.all(['run-report', 'run-explain', 'run-compare', 'run-back'].map(async key => (await ui.find({ key }))?.props.hotkey))
+
+    expect(hotkeys).toEqual(['s', 'w', 'm', 'b'])
+
+    await ui.press({ key: 'run-sc-SC-004' })
+    expect(await ui.find({ key: 'run-report' })).toBeUndefined()
+    expect(await ui.find({ text: /SC-004/ })).toBeDefined()
+    expect(await ui.find({ text: new RegExp(NEW_RUN) })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('the oldest run has no run before it to compare with', async ($, on) => {
+    await start($, on, workspace())
+    await $.command.run(command('tab runs'))
+    const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE.props, requestId: 'rook', viewport: PANE.viewport })
+
+    await ui.press({ key: `run-${OLD_RUN}` })
+    expect(await ui.find({ key: 'run-sc-SC-002' })).toBeDefined()
+    expect(await ui.find({ key: 'run-versus' })).toBeUndefined()
+    await ui.unmount()
+  })
+
   test('a run that finishes during the session joins the list on the next poll', async ($, on) => {
     const { world, clock } = await start($, on, workspace())
     await $.command.run(command('tab runs'))

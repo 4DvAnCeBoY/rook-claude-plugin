@@ -3,6 +3,18 @@ import { needsSync, PROFILE_STEPS, SYNC_NOTE, treeWords } from '../setup'
 import type { ProfileView, SyncState, Wizard } from '../setup'
 import type { El } from './kit'
 
+/** One plugin option as the Setup tab shows it, with where a change goes. */
+export type SettingRow = {
+  id: 'pane' | 'retestBand' | 'failureContext' | 'prodGuard' | 'lens'
+  label: string
+  value: string
+  /** `kept`: written to /config (or $.store, for the lens); `this session`: /config refused, held until the session ends. */
+  scope: 'kept' | 'this session'
+  hotkey?: string
+  /** Why it has no key, or what the key is elsewhere. */
+  note?: string
+}
+
 /** Everything the Setup tab shows past the checklist, once there is an agent. Built in the render hook. */
 export type SetupPanel = {
   profiles: ProfileView[]
@@ -11,7 +23,14 @@ export type SetupPanel = {
   sync: SyncState | null
   /** Nothing in flight that a profile switch or a sync would disturb. */
   canAct: boolean
+  /** The plugin options that change what the pane and the session do (feature: keys). */
+  settings?: SettingRow[]
+  /** A session budget is set: offer to lift it. */
+  hasBudget?: boolean
 }
+
+/** The Setup tab's keys: one per action, from the letters and digits no other feature takes. */
+export const SETUP_KEYS = { use: 'u', test: 'i', refresh: 'h', sync: 'q', checkSync: '0', budgetOff: 'z' } as const
 
 /** The Setup tab's buttons, as closures built in the render hook. */
 export type SetupActions = {
@@ -20,10 +39,13 @@ export type SetupActions = {
   onSync: () => void
   onCheckSync: () => void
   onRefresh: () => void
+  onSetting?: (id: SettingRow['id']) => void
+  onBudget?: (credits: string) => void
+  onBudgetOff?: () => void
 }
 
 /** The setup checklist, the next step highlighted. Shown alone with no agent, and as the Setup tab. Owned by the setup-tab feature. */
-export function SetupTab(props: { el: El; readiness: RookReadiness | undefined; onRecheck: () => void; panel?: SetupPanel; actions?: SetupActions }) {
+export function SetupTab(props: { el: El; readiness: RookReadiness | undefined; onRecheck: () => void; panel?: SetupPanel; actions?: SetupActions; title?: string }) {
   const { Box, Text, Button } = props.el
   const { readiness } = props
   const panel = props.panel !== undefined && props.actions !== undefined ? { ...props.panel, ...props.actions } : undefined
@@ -32,7 +54,7 @@ export function SetupTab(props: { el: El; readiness: RookReadiness | undefined; 
 
   return (
     <Box flexDirection="column">
-      <Text bold>rook · setup</Text>
+      <Text bold>{props.title ?? 'rook · setup'}</Text>
       {readiness === undefined && <Text dimColor>Checking this directory…</Text>}
       {readiness?.steps.map(step => (
         <Box key={`s-${step.id}`}>
@@ -53,14 +75,59 @@ export function SetupTab(props: { el: El; readiness: RookReadiness | undefined; 
       {panel !== undefined && <Profiles el={props.el} panel={panel} />}
       {panel?.wizard !== undefined && <ProfileWizard el={props.el} wizard={panel.wizard} />}
       {panel !== undefined && <Sync el={props.el} panel={panel} />}
-      {panel !== undefined && (
-        <Box key="budget" flexDirection="column">
-          <Text bold>Budget</Text>
-          <Box key="budget-line">
-            <Text wrap="wrap">{panel.budgetLine}</Text>
-          </Box>
+      {panel !== undefined && <Budget el={props.el} panel={panel} />}
+      {panel?.settings !== undefined && <Settings el={props.el} panel={panel} settings={panel.settings} />}
+    </Box>
+  )
+}
+
+/** The session's credit cap: what is left, a box to set one, and Budget off. */
+function Budget(props: { el: El; panel: SetupPanel & SetupActions }) {
+  const { Box, Text, Button } = props.el
+  const Input = props.el.Input
+  const { panel } = props
+
+  return (
+    <Box key="budget" flexDirection="column">
+      <Text bold>Budget</Text>
+      <Box key="budget-line">
+        <Text wrap="wrap">{panel.budgetLine}</Text>
+      </Box>
+      <Box flexDirection="row" gap={1}>
+        {Input !== undefined && panel.onBudget !== undefined && (
+          <Input key="budget-input" placeholder="credits this session may spend" submitLabel="set budget" onSubmit={text => panel.onBudget!(text)} />
+        )}
+        {panel.hasBudget === true && panel.onBudgetOff !== undefined && (
+          <Button key="budget-off" label="Budget off" hotkey={SETUP_KEYS.budgetOff} onPress={panel.onBudgetOff} />
+        )}
+      </Box>
+    </Box>
+  )
+}
+
+/** The plugin options that matter here, their values, and a key to change each; where the change is kept. */
+function Settings(props: { el: El; panel: SetupPanel & SetupActions; settings: SettingRow[] }) {
+  const { Box, Text, Button } = props.el
+  const { panel } = props
+
+  return (
+    <Box key="settings" flexDirection="column">
+      <Text bold>Settings</Text>
+      {props.settings.map(row => (
+        <Box key={`set-${row.id}`} flexDirection="row" gap={1}>
+          {panel.onSetting !== undefined ? (
+            <Button key={`setting-${row.id}`} plain label={`${row.label}: ${row.value}`} {...(row.hotkey !== undefined && { hotkey: row.hotkey })} onPress={() => panel.onSetting!(row.id)} />
+          ) : (
+            <Text>
+              {row.label}: {row.value}
+            </Text>
+          )}
+          <Text dimColor wrap="truncate-end">
+            {row.scope}
+            {row.note === undefined ? '' : ` · ${row.note}`}
+          </Text>
         </Box>
-      )}
+      ))}
     </Box>
   )
 }
@@ -69,12 +136,15 @@ export function SetupTab(props: { el: El; readiness: RookReadiness | undefined; 
 function Profiles(props: { el: El; panel: SetupPanel & SetupActions }) {
   const { Box, Text, Button } = props.el
   const { panel } = props
+  // One key each: Test for the active profile (else the first), Use for the first other one.
+  const tested = (panel.profiles.find(profile => profile.isActive) ?? panel.profiles[0])?.id
+  const firstOther = panel.profiles.find(profile => !profile.isActive)?.id
 
   return (
     <Box key="profiles" flexDirection="column">
       <Box flexDirection="row" gap={1}>
         <Text bold>Profiles</Text>
-        <Button key="refresh-setup" plain label="refresh" onPress={panel.onRefresh} />
+        <Button key="refresh-setup" plain label="refresh" hotkey={SETUP_KEYS.refresh} onPress={panel.onRefresh} />
       </Box>
       {panel.profiles.length === 0 && <Text dimColor>none on disk for this agent.</Text>}
       {panel.profiles.map(profile => (
@@ -116,8 +186,18 @@ function Profiles(props: { el: El; panel: SetupPanel & SetupActions }) {
             </Box>
           )}
           <Box flexDirection="row" gap={1}>
-            {!profile.isActive && panel.canAct && <Button key={`use-${profile.id}`} label="Use" onPress={() => panel.onUse(profile.id)} />}
-            {panel.canAct && <Button key={`test-${profile.id}`} label="Test" onPress={() => panel.onTest(profile.id)} />}
+            {!profile.isActive && panel.canAct && (
+              <Button key={`use-${profile.id}`} label="Use" {...(profile.id === firstOther && { hotkey: SETUP_KEYS.use })} onPress={() => panel.onUse(profile.id)} />
+            )}
+            {panel.canAct && (
+              <Button
+                key={`test-${profile.id}`}
+                label="Test"
+                {...(profile.id === tested && { hotkey: SETUP_KEYS.test })}
+                {...(profile.id === tested && !profile.isVerified && { autoFocus: true as const })}
+                onPress={() => panel.onTest(profile.id)}
+              />
+            )}
           </Box>
         </Box>
       ))}
@@ -217,8 +297,8 @@ function Sync(props: { el: El; panel: SetupPanel & SetupActions }) {
         <Text color="cyan">▸ syncing upstream…</Text>
       ) : (
         <Box flexDirection="row" gap={1}>
-          {canAct && <Button key="sync-upstream" label="Sync upstream" variant={isBehind ? 'primary' : undefined} onPress={props.panel.onSync} />}
-          <Button key="check-sync" label="Check sync state" onPress={props.panel.onCheckSync} />
+          {canAct && <Button key="sync-upstream" label="Sync upstream" variant={isBehind ? 'primary' : undefined} hotkey={SETUP_KEYS.sync} onPress={props.panel.onSync} />}
+          <Button key="check-sync" label="Check sync state" hotkey={SETUP_KEYS.checkSync} onPress={props.panel.onCheckSync} />
         </Box>
       )}
     </Box>

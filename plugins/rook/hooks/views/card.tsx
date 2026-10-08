@@ -34,8 +34,8 @@ export function VerdictCard(props: { el: El; card: CardFacts; onOpen: () => void
       ))}
       {card.more > 0 && <Text dimColor>…and {card.more} more</Text>}
       <Box flexDirection="row" gap={1}>
-        <Button key="card-open" label="Open in pane" onPress={props.onOpen} />
-        {card.hasFailures && <Button key="card-fix" label="Fix with Claude" variant="primary" onPress={props.onFix} />}
+        <Button key="card-open" label="Open in pane" hotkey="o" onPress={props.onOpen} />
+        {card.hasFailures && <Button key="card-fix" label="Fix with Claude" variant="primary" hotkey="x" onPress={props.onFix} />}
       </Box>
     </Box>
   )

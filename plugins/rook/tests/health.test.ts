@@ -197,12 +197,12 @@ describe('health · cancel', () => {
     await ui.press({ key: 'confirm-yes' })
     const advancing = clock.advance(10)
 
-    expect((await ui.find({ key: 'running' }))?.text).toContain('▸ running SC-004')
+    expect((await ui.find({ key: 'live-head' }))?.text).toContain('◐')
     await ui.press({ key: 'cancel-run' })
     await advancing
 
     expect(world.toasts).toContain('run cancelled')
-    expect(await ui.find({ key: 'running' })).toBeUndefined()
+    expect(await ui.find({ key: 'live-head' })).toBeUndefined()
     expect(await ui.find({ key: 'last-error' })).toBeUndefined()
     expect(await ui.find({ key: 'run-all' })).toBeDefined() // free to run again
     release()
@@ -230,7 +230,7 @@ describe('health · cancel', () => {
     let seen: unknown
     world.onRun = () => ({ code: 0, stdout: JSON.stringify({ ok: true, run_id: FRESH }), writes: { [`${AGENT_DIR}/runs/${FRESH}/run.yaml`]: runYaml(FRESH, 'x', ['SC-004']), [`${AGENT_DIR}/runs/${FRESH}/scenarios/SC-004/verdict.yaml`]: VERDICT_PASS_GAP.replace('SC-002', 'SC-004'), [`${AGENT_DIR}/runs/${FRESH}/report.yaml`]: reportYaml(FRESH, 1, 0, 0, 1) } })
     world.during = async () => {
-      seen = { running: await ui.find({ key: 'running' }), cancel: await ui.find({ key: 'cancel-run' }) }
+      seen = { running: await ui.find({ key: 'live-head' }), cancel: await ui.find({ key: 'cancel-run' }) }
     }
     await $.tool.call({ tool: 'mcp__rook__run', only: ['SC-004'] } as never)
     expect((seen as { running?: unknown }).running).toBeDefined()
