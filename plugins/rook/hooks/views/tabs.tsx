@@ -37,7 +37,7 @@ export function TabBar(props: { el: El; tab: RookTab; lens?: RookLens; onTab: (t
           Tab move · Enter press · 1-5 tabs · Esc prompt ·
         </Text>
         {props.lens !== undefined && props.onLens !== undefined && (
-          <Button key="lens" plain dimColor label={`l view: ${LENS_LABEL[props.lens]}`} hotkey="l" onPress={props.onLens} />
+          <Button key="lens" plain dimColor label={`view: ${LENS_LABEL[props.lens]}`} hotkey="l" onPress={props.onLens} />
         )}
       </Box>
     </Box>

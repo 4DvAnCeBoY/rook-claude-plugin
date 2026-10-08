@@ -120,7 +120,7 @@ describe('keys · who gets the keyboard', () => {
       const ui = await mountPane($, isFocused)
 
       expect((await ui.find({ key: 'tabs-hint-row' }))?.text).toContain('Tab move · Enter press · 1-5 tabs · Esc prompt')
-      expect((await ui.find({ key: 'lens' }))?.text).toContain('l view: QE')
+      expect((await ui.find({ key: 'lens' }))?.text).toContain('view: QE')
       await ui.unmount()
     }
   })
