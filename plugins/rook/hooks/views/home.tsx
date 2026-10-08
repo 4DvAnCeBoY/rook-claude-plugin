@@ -284,32 +284,33 @@ export function ReleaseView(props: ReleaseProps) {
 
   return (
     <Box flexDirection="column">
-      {release.hasVerdicts && (
-        <Box key="home-verdict">
-          <Text bold color={release.isReady ? 'green' : 'red'} wrap="truncate-end">
-            {release.isReady ? '✓ Ready to ship' : `✗ Not ready: ${plural(release.blockers.length, 'blocker')}`}
-          </Text>
-        </Box>
-      )}
+      {/* The release call at a glance, boxed in its colour: ready or not, the counts, the rates. */}
+      <Box key="home-verdict-box" flexDirection="column" borderStyle="round" borderColor={!release.hasVerdicts ? 'gray' : release.isReady ? 'green' : 'red'} paddingX={1}>
+        {release.hasVerdicts && (
+          <Box key="home-verdict">
+            <Text bold color={release.isReady ? 'green' : 'red'} wrap="truncate-end">
+              {release.isReady ? '✓ Ready to ship' : `✗ Not ready: ${plural(release.blockers.length, 'blocker')}`}
+            </Text>
+          </Box>
+        )}
+        {(release.hasVerdicts || props.neverRun > 0) && (
+          <Box key="home-counts" flexDirection="row" gap={2} flexWrap="wrap">
+            <Text color="green">✓ {props.counts.pass} Pass</Text>
+            <Text color="red">✗ {props.counts.fail} Fail</Text>
+            <Text color="yellow">? {props.counts.unverifiable} Unable to Verify</Text>
+            {props.neverRun > 0 && <Text dimColor>{props.neverRun} never run</Text>}
+          </Box>
+        )}
+        {release.hasVerdicts && (
+          <Box key="home-rates">
+            <Text wrap="truncate-end">{releaseLine(release)}</Text>
+          </Box>
+        )}
+      </Box>
       {props.runLine !== undefined && (
         <Text dimColor wrap="truncate-end">
           latest: {props.runLine}
         </Text>
-      )}
-      {(release.hasVerdicts || props.neverRun > 0) && (
-        <Box key="home-counts" flexDirection="row" gap={2}>
-          <Text color="green">✓ {props.counts.pass} Pass</Text>
-          <Text color="red">✗ {props.counts.fail} Fail</Text>
-          <Text color="yellow">? {props.counts.unverifiable} Unable to Verify</Text>
-          {props.neverRun > 0 && <Text dimColor>{props.neverRun} never run</Text>}
-        </Box>
-      )}
-      {release.hasVerdicts && (
-        <Box key="home-rates">
-          <Text wrap="truncate-end">
-            {releaseLine(release)}
-          </Text>
-        </Box>
       )}
       {props.metrics !== undefined && props.metrics !== '' && <Text dimColor>{props.metrics}</Text>}
       {(props.moved.fixed.length > 0 || props.moved.regressed.length > 0) && (
@@ -384,15 +385,17 @@ export function ChangeView(props: ChangeProps) {
 
   return (
     <Box flexDirection="column">
-      <Box key="home-verdict">
-        <Text bold color={regressions.length > 0 ? 'red' : 'green'} wrap="truncate-end">
-          {regressions.length > 0 ? `✗ ${plural(regressions.length, 'regression')} since ${props.isGreen === false ? 'the baseline' : 'your last green'}` : '✓ No regressions from your change'}
+      <Box key="home-verdict-box" flexDirection="column" borderStyle="round" borderColor={regressions.length > 0 ? 'red' : 'green'} paddingX={1}>
+        <Box key="home-verdict">
+          <Text bold color={regressions.length > 0 ? 'red' : 'green'} wrap="truncate-end">
+            {regressions.length > 0 ? `✗ ${plural(regressions.length, 'regression')} since ${props.isGreen === false ? 'the baseline' : 'your last green'}` : '✓ No regressions from your change'}
+          </Text>
+        </Box>
+        <Text dimColor wrap="wrap">
+          {props.lastGreen === undefined ? 'no green run yet' : props.isGreen === false ? `baseline: ${props.lastGreen} (no fully green run yet; the run before the first regression)` : `last green: ${props.lastGreen}`}
+          {props.runLine !== undefined ? ` · latest: ${props.runLine}` : ''}
         </Text>
       </Box>
-      <Text dimColor wrap="truncate-end">
-        {props.lastGreen === undefined ? 'no green run yet' : props.isGreen === false ? `baseline: ${props.lastGreen} (no fully green run yet; the run before the first regression)` : `last green: ${props.lastGreen}`}
-        {props.runLine !== undefined ? ` · latest: ${props.runLine}` : ''}
-      </Text>
 
       <Text bold>Your change</Text>
       {changed.length === 0 && (

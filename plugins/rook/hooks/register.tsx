@@ -4396,7 +4396,7 @@ export const register: Register = (on, options) => {
         {liveView as never}
         {lead}
         {body as never}
-        {e.props.isFocused && <KeysHint el={el} />}
+
       </Box>
     )
 

@@ -15,24 +15,31 @@ export const tabLabel = (id: RookTab, label: string, lens: RookLens | undefined)
 
 export const LENS_LABEL: Record<RookLens, string> = { qe: 'QE', dev: 'Developer' }
 
-/** The pane's tab row: the open tab bold, the others buttons, then the lens switch on `l`. */
+/** The pane's tab row: each tab a [ button ], the open one marked ▸ in the accent colour, then the view switch on `l`, and how to drive it. */
 export function TabBar(props: { el: El; tab: RookTab; lens?: RookLens; onTab: (tab: RookTab) => void; onLens?: () => void }) {
   const { Box, Text, Button } = props.el
 
   return (
-    <Box flexDirection="row" gap={1} flexWrap="wrap">
-      {TABS.map(t =>
-        t.id === props.tab ? (
-          <Text key={`tab-${t.id}`} bold underline>
-            {t.hotkey}: {tabLabel(t.id, t.label, props.lens)}
-          </Text>
-        ) : (
-          <Button key={`tab-${t.id}`} plain label={tabLabel(t.id, t.label, props.lens)} hotkey={t.hotkey} onPress={() => props.onTab(t.id)} />
-        ),
-      )}
-      {props.lens !== undefined && props.onLens !== undefined && (
-        <Button key="lens" plain dimColor label={`view: ${LENS_LABEL[props.lens]}`} hotkey="l" onPress={props.onLens} />
-      )}
+    <Box flexDirection="column">
+      <Box flexDirection="row" gap={1} flexWrap="wrap">
+        {TABS.map(t =>
+          t.id === props.tab ? (
+            <Text key={`tab-${t.id}`} bold color="cyan">
+              [ ▸ {tabLabel(t.id, t.label, props.lens)} ]
+            </Text>
+          ) : (
+            <Button key={`tab-${t.id}`} label={tabLabel(t.id, t.label, props.lens)} hotkey={t.hotkey} onPress={() => props.onTab(t.id)} />
+          ),
+        )}
+      </Box>
+      <Box key="tabs-hint-row" flexDirection="row" gap={1} flexWrap="wrap">
+        <Text key="tabs-hint" dimColor>
+          Tab move · Enter press · 1-5 tabs · Esc prompt ·
+        </Text>
+        {props.lens !== undefined && props.onLens !== undefined && (
+          <Button key="lens" plain dimColor label={`l view: ${LENS_LABEL[props.lens]}`} hotkey="l" onPress={props.onLens} />
+        )}
+      </Box>
     </Box>
   )
 }

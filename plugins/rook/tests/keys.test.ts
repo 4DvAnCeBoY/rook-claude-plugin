@@ -113,16 +113,16 @@ describe('keys · who gets the keyboard', () => {
     await card.unmount()
   })
 
-  test('a focused pane says how to move at its foot; an unfocused one does not', async ($, on) => {
+  test('the tab bar says how to drive the pane, under the tabs, focused or not', async ($, on) => {
     await start($, on, workspace())
 
-    const unfocused = await mountPane($)
-    expect(await unfocused.find({ text: KEYS_HINT })).toBeUndefined()
-    await unfocused.unmount()
+    for (const isFocused of [false, true]) {
+      const ui = await mountPane($, isFocused)
 
-    const focused = await mountPane($, true)
-    expect((await focused.find({ key: 'keys-hint' }))?.text).toBe(KEYS_HINT)
-    await focused.unmount()
+      expect((await ui.find({ key: 'tabs-hint-row' }))?.text).toContain('Tab move · Enter press · 1-5 tabs · Esc prompt')
+      expect((await ui.find({ key: 'lens' }))?.text).toContain('l view: QE')
+      await ui.unmount()
+    }
   })
 })
 

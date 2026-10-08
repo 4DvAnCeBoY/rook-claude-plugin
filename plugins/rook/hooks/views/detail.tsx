@@ -41,6 +41,9 @@ const mark = (status: RookStatus): { icon: string; color: string } =>
 const roleLabel = (role: string) => (role === 'user' ? 'rook (as the user)' : role)
 
 /** One scenario of one run: why it is whose, then the evidence in the lens's order, then what to do. Owned by the drill-down feature. */
+/** Each hook its own colour, so the waterfall reads at a glance; a failed one is red. */
+const PHASE_COLOR: Record<string, string> = { prepare: 'gray', open: 'blue', execute: 'magenta', close: 'cyan', collect: 'green', judge: 'yellow' }
+
 export function ScenarioDrillDown(props: DetailProps) {
   const { Box, Text, Button } = props.el
   const { evidence: e, owner, id } = props
@@ -223,7 +226,7 @@ export function ScenarioDrillDown(props: DetailProps) {
             <Box key={`dd-p-${r.name}`} flexDirection="column">
               <Text wrap="truncate-end" color={r.isFailed ? 'red' : undefined} dimColor={!r.ran}>
                 {r.isFailed ? '◆ ' : '  '}
-                {r.name.padEnd(8)} {r.bar} {r.ms}
+                {r.name.padEnd(8)} <Text color={r.isFailed ? 'red' : PHASE_COLOR[r.name] ?? 'cyan'}>{r.bar}</Text> {r.ms}
               </Text>
               {r.isFailed && r.error !== undefined && (
                 <Text wrap="wrap" color="red">
