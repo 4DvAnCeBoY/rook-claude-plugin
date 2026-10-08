@@ -23,6 +23,12 @@ import type { RunDiff } from './history'
 
 // ── imports: scenarios tab
 import { ScenariosTab } from './views/scenarios'
+import type { ScenarioDetail } from './views/scenarios'
+import { FLAKY_DEFAULT, filterScenarios, flakyText, isFilter, parseFlakyArgs, readScenarios, regressionPrompt, toggled, withAll, withVerdicts } from './scenarios'
+import type { ScenarioInfo } from './scenarios'
+import { failureNote as scenarioFailureNote } from './format'
+import { rowOf } from './workspace'
+import type { RookStatus } from '../types'
 // ── end imports: scenarios tab
 
 // ── imports: setup tab
@@ -180,6 +186,7 @@ const selectedAtom = atom({ plugin: 'rook', key: 'selected' } as const, [])
 const filterAtom = atom({ plugin: 'rook', key: 'filter' } as const, 'all')
 const draftAtom = atom({ plugin: 'rook', key: 'draft' } as const, '')
 const flakyAtom = atom({ plugin: 'rook', key: 'flaky' } as const, {})
+const scenarioDetailAtom = atom({ plugin: 'rook', key: 'scenarioDetail' } as const, null)
 // ── end atoms: scenarios tab
 
 // ── atoms: setup tab
@@ -276,6 +283,8 @@ type Ctx = {
   statusTrend?: { key: string; points: TrendPoint[] }
   /** Ends the background run the person started (pane, /rook run), for its Cancel. */
   runAbort?: AbortController
+  /** The agent's scenario files as last read for the Scenarios tab, keyed by agent directory and index signature. */
+  scenarioList?: { key: string; list: ScenarioInfo[] }
 }
 
 function textOption(value: unknown, fallback: string): string {
@@ -1716,6 +1725,8 @@ async function confirmNow($: EngineInterface, ctx: Ctx): Promise<void> {
 
     $.ui.toast('rook: generating scenarios in the background.')
     $.clock.after(0, () => backgroundGenerate($, ctx, request))
+  } else if (confirm?.action === 'flaky') {
+    $.ui.toast(await flakyStart($, ctx, confirm.id, confirm.times, 'pane'))
   }
 }
 
@@ -1951,13 +1962,233 @@ async function clearCompare($: EngineInterface): Promise<void> {
 
 // ══ feature: scenarios tab (filter, select, detail, flaky, generate box) ═════
 
+/** The agent's scenario files, read once per change of the scenario set (the poll's index signature), not per drawing. */
+async function scenarioList($: EngineInterface, ctx: Ctx): Promise<ScenarioInfo[]> {
+  const loc = ctx.located
+
+  if (loc === undefined) {
+    return []
+  }
+
+  const key = `${loc.agentDir}#${ctx.indexSignature ?? ''}`
+
+  if (ctx.scenarioList?.key === key) {
+    return ctx.scenarioList.list
+  }
+
+  const list = await readScenarios(ioOf($, ctx), loc.agentDir)
+  ctx.scenarioList = { key, list }
+
+  return list
+}
+
+/** A scenario's verdict in one run, from the row cache or its verdict.yaml. */
+async function scenarioVerdict($: EngineInterface, ctx: Ctx, id: string, runId: string): Promise<{ row?: RookScenarioRow; verdictPath?: string }> {
+  const loc = ctx.located ?? (await where($, ctx))
+
+  if (loc === undefined) {
+    return {}
+  }
+
+  const verdictPath = `${loc.agentDir}/runs/${runId}/scenarios/${id}/verdict.yaml`
+  const cached = ctx.rows.get(`${runId}/${id}`)
+
+  if (cached !== undefined) {
+    return { row: cached, verdictPath }
+  }
+
+  const text = await ioOf($, ctx).read(verdictPath)
+  const row = text === undefined ? undefined : rowOf(id, text, undefined)
+
+  return row === undefined ? { verdictPath } : { row, verdictPath }
+}
+
+async function scenarioRunSelected($: EngineInterface): Promise<void> {
+  const selected = await read($, selectedAtom)
+
+  if (selected.length === 0) {
+    return
+  }
+
+  const rate = creditsPerScenario((await read($, snapshotAtom))?.latest)
+  const label = `Run ${selected.length} selected scenario${selected.length === 1 ? '' : 's'}: ${clip(selected.join(', '), 80)}`
+
+  await askConfirm($, { action: 'run', only: selected, label, ...(rate !== undefined && { credits: rate * selected.length }) })
+}
+
+/** Exclude or include the selected scenarios (rook scenarios exclude|include): no credits, no confirm. */
+async function scenarioCurate($: EngineInterface, ctx: Ctx, verb: 'exclude' | 'include'): Promise<void> {
+  const selected = await read($, selectedAtom)
+
+  if (selected.length === 0) {
+    return
+  }
+
+  const text = await curateReply($, ctx, verb, selected)
+
+  ctx.scenarioList = undefined // the files changed under the same names
+  await update($, selectedAtom, () => [])
+  $.ui.toast(text.startsWith('rook') ? text : `rook: ${text}`)
+}
+
+/** One failing scenario handed to Claude, whichever run its newest verdict is from. */
+async function scenarioFix($: EngineInterface, ctx: Ctx, id: string): Promise<void> {
+  const loc = ctx.located ?? (await where($, ctx))
+  const current = (await read($, snapshotAtom))?.current.find(row => row.id === id)
+
+  if (loc === undefined || current === undefined) {
+    return
+  }
+
+  const { row, verdictPath } = await scenarioVerdict($, ctx, id, current.runId)
+
+  if (row === undefined || verdictPath === undefined) {
+    return
+  }
+
+  await $.prompt.submit({
+    text:
+      `rook run ${current.runId} against agent ${loc.agentId}:\n${scenarioFailureNote(row, verdictPath)}\n\n` +
+      `Fix this. If the evidence shows the criterion is wrong rather than the agent, say so. Then re-test with the rook run tool, passing only ${id}.`,
+  })
+}
+
+/** Ask Claude to pin a failure as a regression scenario of its feature, with the rook generate tool. */
+async function scenarioRegression($: EngineInterface, ctx: Ctx, id: string): Promise<void> {
+  const info = (await scenarioList($, ctx)).find(s => s.id === id)
+  const current = (await read($, snapshotAtom))?.current.find(row => row.id === id)
+
+  if (info === undefined) {
+    return
+  }
+
+  const verdict = current === undefined ? {} : await scenarioVerdict($, ctx, id, current.runId)
+
+  await $.prompt.submit({ text: regressionPrompt(info, verdict.row, verdict.verdictPath) })
+}
+
+async function scenarioAskFlaky($: EngineInterface, id: string): Promise<void> {
+  const rate = creditsPerScenario((await read($, snapshotAtom))?.latest)
+
+  await askConfirm($, {
+    action: 'flaky',
+    id,
+    times: FLAKY_DEFAULT,
+    label: `Re-run ${id} ${FLAKY_DEFAULT}× in a row (flaky check)`,
+    ...(rate !== undefined && { credits: rate * FLAKY_DEFAULT }),
+  })
+}
+
+/** The generate box: Enter passes the text, the button reads the draft. */
+async function scenarioGenerate($: EngineInterface, text?: string): Promise<void> {
+  if (text !== undefined) {
+    await update($, draftAtom, () => text)
+  }
+
+  const instruction = (text ?? (await read($, draftAtom))).trim()
+
+  if (instruction === '') {
+    $.ui.toast('rook: type what the new scenarios should cover first.')
+
+    return
+  }
+
+  await askConfirm($, { action: 'generate', instruction: instruction.slice(0, 2000), label: `Generate scenarios: ${clip(instruction, 80)}` })
+}
+
+/**
+ * A flaky check: one scenario run `times` times one after another, in the
+ * background, under the one-run-at-a-time rule. Each verdict lands in
+ * `flaky[id]`; verdicts that disagree mark the scenario flaky.
+ */
+async function flakyStart($: EngineInterface, ctx: Ctx, id: string, times: number, source: 'command' | 'pane'): Promise<string> {
+  if ((await read($, runningAtom)) !== null) {
+    return 'rook: a run is already in progress.'
+  }
+
+  const args = runArgs({ only: [id], name: `flaky check ${id}` }, ctx.approval)
+
+  if ('error' in args) {
+    return `rook: ${args.error}`
+  }
+
+  const unready = await setupBlock($, ctx, NEEDS.run, 'run')
+
+  if (unready !== undefined) {
+    return `rook: ${unready}`
+  }
+
+  const blocked = (await prodBlock($, ctx)) ?? (await budgetBlock($, ctx, 'run'))
+
+  if (blocked !== undefined) {
+    return blocked
+  }
+
+  const startedAt = await $.clock.now()
+
+  await update($, runningAtom, () => ({ startedAt, label: `${id} ×${times} (flaky check)`, source }))
+  await update($, lastErrorAtom, () => null)
+  await update($, flakyAtom, flaky => ({ ...flaky, [id]: [] }))
+  await showStatus($, ctx)
+  $.clock.after(0, () => flakyLoop($, ctx, id, times, args.argv))
+
+  return `rook: re-running ${id} ${times} times in a row in the background. The Scenarios tab marks it flaky if the verdicts disagree.`
+}
+
+async function flakyLoop($: EngineInterface, ctx: Ctx, id: string, times: number, argv: string[]): Promise<void> {
+  const verdicts: RookStatus[] = []
+  let problem: string | undefined
+
+  try {
+    for (let at = 0; at < times; at += 1) {
+      const blocked = at === 0 ? undefined : await budgetBlock($, ctx, 'run')
+
+      if (blocked !== undefined) {
+        problem = blocked
+        break
+      }
+
+      const result = await rookRun($, ctx, argv)
+      const loc = ctx.located ?? (await where($, ctx))
+      const said = (result.doc as { run_id?: unknown } | undefined)?.run_id
+      const runId = typeof said === 'string' && RUN_ID.test(said) ? said : loc === undefined ? undefined : (await runIds(ioOf($, ctx), loc.agentDir))[0]
+
+      if (runId !== undefined) {
+        await update($, seenAtom, () => runId) // reported here, not as a run that finished elsewhere
+      }
+
+      const status = runId === undefined ? undefined : (await scenarioVerdict($, ctx, id, runId)).row?.status
+
+      if (status === undefined) {
+        problem = failureOf(result) ?? `run ${at + 1} left no verdict for ${id}`
+        break
+      }
+
+      verdicts.push(status)
+      await update($, flakyAtom, flaky => ({ ...flaky, [id]: [...verdicts] }))
+    }
+  } catch (error) {
+    problem = `could not start ${ctx.bin} — ${clip(String(error), 120)}`
+  } finally {
+    await update($, runningAtom, () => null)
+    await poll($, ctx)
+    await refreshBalance($, ctx)
+  }
+
+  if (problem !== undefined) {
+    const at = await $.clock.now()
+
+    await update($, lastErrorAtom, () => ({ source: 'run', text: `flaky check of ${id}: ${clip(problem!, 400)}`, at }))
+  }
+
+  $.ui.toast(`rook: ${flakyText(id, verdicts, times)}`)
+}
+
 /** `/rook flaky <id> [times]`. */
 async function flakyReply($: EngineInterface, ctx: Ctx, args: string[]): Promise<string> {
-  void $
-  void ctx
-  void args
+  const parsed = parseFlakyArgs(args)
 
-  return 'rook: flaky checks are not built yet.'
+  return 'error' in parsed ? `rook: ${parsed.error}` : flakyStart($, ctx, parsed.id, parsed.times, 'command')
 }
 
 // ══ end feature: scenarios tab ═══════════════════════════════════════════════
@@ -2716,7 +2947,44 @@ export const register: Register = (on, options) => {
 
     // ── pane seam: scenarios tab
     if (tab === 'scenarios') {
-      return frame(<ScenariosTab el={el} />)
+      const filter = await read($, filterAtom)
+      const selected = await read($, selectedAtom)
+      const flaky = await read($, flakyAtom)
+      const draft = await read($, draftAtom)
+      const openId = await read($, scenarioDetailAtom)
+      const views = withVerdicts(await scenarioList($, ctx), snapshot.current)
+      const shown = filterScenarios(views, filter)
+      const open = openId === null ? undefined : views.find(view => view.id === openId)
+      const detail: ScenarioDetail | undefined =
+        open === undefined ? undefined : { scenario: open, ...(open.runId === undefined ? {} : await scenarioVerdict($, ctx, open.id, open.runId)) }
+
+      return frame(
+        <ScenariosTab
+          el={el}
+          rows={shown}
+          total={views.length}
+          filter={filter}
+          selected={selected}
+          flaky={flaky}
+          detail={detail}
+          draft={draft}
+          canRun={running === null && blockedText(readiness, NEEDS.run, 'run') === undefined}
+          rate={creditsPerScenario(snapshot.latest)}
+          width={width}
+          onFilter={next => update($, filterAtom, () => (isFilter(next) ? next : 'all'))}
+          onToggle={id => update($, selectedAtom, ids => toggled(ids, id))}
+          onOpen={id => update($, scenarioDetailAtom, was => (was === id ? null : id))}
+          onSelectAll={() => update($, selectedAtom, ids => withAll(ids, shown.map(view => view.id)))}
+          onClear={() => update($, selectedAtom, () => [])}
+          onRunSelected={() => scenarioRunSelected($)}
+          onCurate={verb => scenarioCurate($, ctx, verb)}
+          onFix={id => scenarioFix($, ctx, id)}
+          onRegression={id => scenarioRegression($, ctx, id)}
+          onFlaky={id => scenarioAskFlaky($, id)}
+          onDraft={text => update($, draftAtom, () => text)}
+          onGenerate={text => scenarioGenerate($, text)}
+        />,
+      )
     }
     // ── end pane seam: scenarios tab
 
