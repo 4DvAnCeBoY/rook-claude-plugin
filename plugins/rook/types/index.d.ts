@@ -216,6 +216,8 @@ export type RookSnapshot = {
   readiness?: RookReadiness
   /** Outside a rook workspace: what the repository holds that rook could start from (feature: keys and setup). */
   repoFound?: RookRepoFound[]
+  /** The active profile's variables with no value in rook's env store for this directory. Names only, never values. */
+  unsetVariables?: string[]
 }
 
 export type RookStale = {

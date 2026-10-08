@@ -269,5 +269,12 @@ export function freshnessText(isLive: boolean, checkedAt: number | undefined, no
     return '● live'
   }
 
-  return checkedAt === undefined || checkedAt <= 0 ? undefined : `updated ${elapsed(Math.max(0, now - checkedAt))} ago`
+  if (checkedAt === undefined || checkedAt <= 0) {
+    return undefined
+  }
+
+  // Minutes, not seconds: the pane redraws on a change, and once a minute for this line (register.tsx poll).
+  const minutes = Math.floor(Math.max(0, now - checkedAt) / 60_000)
+
+  return minutes < 1 ? 'updated <1m ago' : minutes < 60 ? `updated ${minutes}m ago` : `updated ${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, '0')}m ago`
 }

@@ -123,7 +123,8 @@ describe('live · stale verdicts and rows', () => {
     expect(liveHeadline({ running, isOwn: true, now: 12_000 })).toBe('◐ pane starting all · 2s')
     expect(runBandText(r, null, 0)).toBe('◐ rook · 2/4 · SC-009 judging · 1 failing')
     expect(freshnessText(true, 0, 0)).toBe('● live')
-    expect(freshnessText(false, 1_000, 13_000)).toBe('updated 12s ago')
+    expect(freshnessText(false, 1_000, 13_000)).toBe('updated <1m ago')
+    expect(freshnessText(false, 1_000, 1_000 + 5 * 60_000)).toBe('updated 5m ago')
   })
 })
 
@@ -238,8 +239,11 @@ describe('live · in a session', () => {
     const { clock } = await start($, on, workspace())
     const ui = await mountPane($)
 
-    expect(await ui.find({ text: /updated \d+s ago/ })).toBeDefined()
+    expect(await ui.find({ text: /updated <1m ago/ })).toBeDefined()
     expect(await ui.find({ key: 'live' })).toBeUndefined()
-    await clock.advance(1)
+
+    // Nothing changes on disk, yet the line moves on: the poll redraws it once a minute.
+    await clock.advance(2 * 60_000 + 5_000)
+    expect(await ui.find({ text: /updated 2m ago/ })).toBeDefined()
   })
 })

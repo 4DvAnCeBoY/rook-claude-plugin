@@ -345,7 +345,8 @@ function neverRunParts(snapshot: RookSnapshot, setup: string | undefined, trend:
   const count = snapshot.neverRun + snapshot.current.length
   const newest = [...trend].reverse().find(point => point.credits !== undefined && point.executed > 0)
   const cost = newest === undefined || count === 0 ? '' : ` ~${Math.round((newest.credits! / newest.executed) * count)}cr`
-  const next = setup !== undefined && setup !== '' ? setup.replace(/^setup: /, '') : `first run${cost}`
+  const unset = snapshot.unsetVariables ?? []
+  const next = setup !== undefined && setup !== '' ? setup.replace(/^setup: /, '') : unset.length > 0 ? `set ${unset.join(', ')}` : `first run${cost}`
 
   return [
     { text: `${count} scenario${count === 1 ? '' : 's'}`, rank: 0 },

@@ -385,6 +385,8 @@ type Ctx = {
   lensDefault: RookLens
   /** The runs the verdict history was last read from, to skip re-reading when nothing changed. */
   verdictSignature?: string
+  /** Minutes since the snapshot last changed, as the pane header last drew them. */
+  freshMinute?: number
   /** Verdict statuses by file path, for the history: a verdict is written once. */
   verdictCache?: Map<string, RookStatus>
   /** feature: keys — the fresh-repo scan and the settings /config would not keep. */
@@ -639,9 +641,12 @@ async function poll($: EngineInterface, ctx: Ctx): Promise<void> {
     const isSettled =
       !ctx.isDirty && before?.agentId === loc.agentId && before.latest?.runId === latestId && before.latest?.finished === true
 
+    // `! rook env set` changes no workspace file: read the names each poll so the pane and the line follow it.
+    const unsetVariables = await unsetOfActive($, ctx, loc)
+
     if (isSettled) {
-      if (JSON.stringify(before.readiness) !== JSON.stringify(readiness)) {
-        await update($, snapshotAtom, snapshot => (snapshot === null ? null : { ...snapshot, readiness }))
+      if (JSON.stringify(before.readiness) !== JSON.stringify(readiness) || JSON.stringify(before.unsetVariables ?? []) !== JSON.stringify(unsetVariables)) {
+        await update($, snapshotAtom, snapshot => (snapshot === null ? null : { ...snapshot, readiness, unsetVariables }))
       }
 
       return
@@ -667,6 +672,7 @@ async function poll($: EngineInterface, ctx: Ctx): Promise<void> {
       ...(ids.length === 0 && { elsewhere: await runsElsewhere(io, loc.projectDir) }),
       checkedAt: await $.clock.now(),
       readiness,
+      unsetVariables,
     }
 
     if (JSON.stringify({ ...before, checkedAt: 0 }) !== JSON.stringify({ ...snapshot, checkedAt: 0 })) {
@@ -686,6 +692,7 @@ async function poll($: EngineInterface, ctx: Ctx): Promise<void> {
   } finally {
     await refreshHistory($, ctx)
     await refreshVerdicts($, ctx)
+    await redrawEachMinute($, ctx)
     ctx.isPolling = false
     await showStatus($, ctx)
   }
@@ -723,6 +730,37 @@ async function finished($: EngineInterface, ctx: Ctx, loc: Located, run: RookRun
 }
 
 // ── 7 · production guard ─────────────────────────────────────────────────────
+
+/** The active profile's declared variables that rook's env store has no value for here: names only. */
+/** The header's "updated Nm ago" moves once a minute even when nothing else changes. */
+async function redrawEachMinute($: EngineInterface, ctx: Ctx): Promise<void> {
+  const checkedAt = (await read($, snapshotAtom))?.checkedAt
+
+  if (checkedAt === undefined) {
+    return
+  }
+
+  const minute = Math.floor(Math.max(0, (await $.clock.now()) - checkedAt) / 60_000)
+
+  if (minute !== ctx.freshMinute) {
+    ctx.freshMinute = minute
+    await update($, tickAtom, () => checkedAt + minute)
+  }
+}
+
+async function unsetOfActive($: EngineInterface, ctx: Ctx, loc: Located): Promise<string[]> {
+  const io = ioOf($, ctx)
+  const active = (await io.read(`${loc.agentDir}/profiles/active`))?.trim()
+
+  if (active === undefined || active === '' || !/^[\w.][\w.-]{0,63}$/.test(active)) {
+    return []
+  }
+
+  const declared = declaredVariables((await io.read(`${loc.agentDir}/profiles/${active}.yaml`)) ?? '')
+  const set = await variableValues($, ctx, declared)
+
+  return declared.filter(name => set[name] === undefined)
+}
 
 async function variableValues($: EngineInterface, ctx: Ctx, names: readonly string[]): Promise<Record<string, string>> {
   const values: Record<string, string> = {}
@@ -4492,7 +4530,10 @@ export const register: Register = (on, options) => {
 
     let body: unknown
 
-    if (lens === 'dev') {
+    if (run === undefined && (snapshot.runCount ?? 0) === 0) {
+      // Nothing judged yet: no release call to make, no change to measure.
+      body = null
+    } else if (lens === 'dev') {
       const change = await homeChange($, ctx, snapshot)
 
       body = <ChangeView {...common} {...change} onFix={() => homeFix($, ctx)} onRetest={() => homeRetest($, ctx)} />
