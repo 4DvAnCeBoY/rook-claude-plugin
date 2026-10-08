@@ -8,6 +8,10 @@ import { ConfirmBar } from './views/confirm'
 import { SetupTab } from './views/setup'
 // ── imports: progress
 import { JobLanes } from './views/job'
+import { featureEntries, jobFromDisk, jobFromLine, jobSpinnerText, lineSplitter, newJob, scenarioEntries, scenarioKeys } from './progress'
+import type { DiskEntry } from './progress'
+import type { RookJob } from '../types'
+import type { Timer } from 'claude-code'
 // ── end imports: progress
 
 // ── imports: health
@@ -331,11 +335,20 @@ async function rookJson($: EngineInterface, ctx: Ctx, args: string[]): Promise<C
  * A run can outlast `process.run`'s ten-minute ceiling, so it is streamed: the
  * child lives as long as the loop reading it, and `signal` ends both.
  */
-async function rookRun($: EngineInterface, ctx: Ctx, argv: string[], signal?: AbortSignal, env: Record<string, string> = {}): Promise<CliResult> {
+async function rookRun(
+  $: EngineInterface,
+  ctx: Ctx,
+  argv: string[],
+  signal?: AbortSignal,
+  env: Record<string, string> = {},
+  onLine?: (line: string) => void,
+): Promise<CliResult> {
   const stream = $.process.spawn({ argv: [ctx.bin, ...argv], env: { ...CLI_ENV, ...env }, input: '', ...(ctx.cwd !== '' && { cwd: ctx.cwd }) })
   const iterator = stream[Symbol.asyncIterator]()
   let stdout = ''
   let stderr = ''
+  // Whole lines as they arrive, each stream split on its own: progress for a caller that draws it.
+  const lines = onLine === undefined ? undefined : { stdout: lineSplitter(onLine), stderr: lineSplitter(onLine) }
 
   for (;;) {
     if (signal?.aborted) {
@@ -354,9 +367,13 @@ async function rookRun($: EngineInterface, ctx: Ctx, argv: string[], signal?: Ab
 
     if (step.done) {
       const ended = step.value as { code: number | null } | undefined
+      lines?.stdout.flush()
+      lines?.stderr.flush()
 
       return { exitCode: ended?.code ?? 1, doc: jsonOf(stdout), stderr, stdout }
     }
+
+    lines?.[step.value.stream === 'stdout' ? 'stdout' : 'stderr'].push(step.value.text)
 
     if (step.value.stream === 'stdout') {
       stdout += step.value.text
@@ -932,7 +949,7 @@ async function scenariosReply($: EngineInterface, ctx: Ctx): Promise<string> {
 }
 
 /** `rook generate`, streamed like a run: it reads the code and writes scenarios, which takes minutes. */
-async function generateRun($: EngineInterface, ctx: Ctx, request: GenerateRequest, signal?: AbortSignal): Promise<string> {
+async function generateRun($: EngineInterface, ctx: Ctx, request: GenerateRequest, signal?: AbortSignal, source: NonNullable<RookJob['source']> = 'tool'): Promise<string> {
   const args = generateArgs(request, ctx.approval)
 
   if ('error' in args) {
@@ -945,14 +962,17 @@ async function generateRun($: EngineInterface, ctx: Ctx, request: GenerateReques
     return `rook: ${unready.replace(/^rook:\s*/, '')}`
   }
 
+  const job = await jobBegin($, ctx, 'generate', jobLabel(ctx, 'generate', request.instruction), source)
+
   try {
-    const result = await rookRun($, ctx, args.argv, signal)
+    const result = await rookRun($, ctx, args.argv, signal, {}, line => jobLine($, job, line))
     const problem = failureOf(result)
 
     return problem !== undefined && (result.doc === undefined || (result.doc as { ok?: unknown }).ok === false)
       ? await explained($, ctx, result, `rook generate did not complete: ${problem}`, NEEDS.generate, 'generate scenarios')
       : generateText(result.doc, result.stdout ?? '') + (problem ? `\n${problem}` : '')
   } finally {
+    await jobEnd($, job)
     ctx.agentIndex = undefined // the scenario set changed
     ctx.isDirty = true
     await poll($, ctx)
@@ -1115,7 +1135,7 @@ async function retest($: EngineInterface): Promise<void> {
 /** `/rook generate`: in the background, its failure kept in the pane as well as toasted. */
 async function backgroundGenerate($: EngineInterface, ctx: Ctx, request: GenerateRequest): Promise<void> {
   await update($, lastErrorAtom, () => null)
-  const text = await generateRun($, ctx, request).catch(error => `rook generate failed: ${String(error)}`)
+  const text = await generateRun($, ctx, request, undefined, 'background').catch(error => `rook generate failed: ${String(error)}`)
 
   // What was written always opens "rook generate: N scenario files written"; anything else failed.
   if (!text.startsWith('rook generate:')) {
@@ -1244,7 +1264,7 @@ async function rookCommand($: EngineInterface, ctx: Ctx, e: CommandRunInput): Pr
         return { text: unready }
       }
 
-      $.clock.after(0, async () => $.ui.toast(clip(await exploreRun($, ctx, request).catch(error => `rook explore failed: ${String(error)}`), 300)))
+      $.clock.after(0, async () => $.ui.toast(clip(await exploreRun($, ctx, request, undefined, 'background').catch(error => `rook explore failed: ${String(error)}`), 300)))
 
       return { text: 'rook: exploring this repository in the background (minutes, spends credits). A toast says what it found; the pane picks the agent up.' }
     }
@@ -1381,7 +1401,7 @@ async function agentsOnDisk($: EngineInterface, ctx: Ctx): Promise<{ id: string;
   return found
 }
 
-async function exploreRun($: EngineInterface, ctx: Ctx, request: ExploreRequest, signal?: AbortSignal): Promise<string> {
+async function exploreRun($: EngineInterface, ctx: Ctx, request: ExploreRequest, signal?: AbortSignal, source: NonNullable<RookJob['source']> = 'tool'): Promise<string> {
   const args = exploreArgs(request, ctx.approval)
 
   if ('error' in args) {
@@ -1394,8 +1414,10 @@ async function exploreRun($: EngineInterface, ctx: Ctx, request: ExploreRequest,
     return `rook: ${unready}`
   }
 
+  const job = await jobBegin($, ctx, 'explore', jobLabel(ctx, 'explore', request.instruction), source)
+
   try {
-    const result = await rookRun($, ctx, args.argv, signal)
+    const result = await rookRun($, ctx, args.argv, signal, {}, line => jobLine($, job, line))
 
     if (result.exitCode !== 0) {
       const problem = failureOf(result) ?? `rook exited ${result.exitCode}`
@@ -1405,6 +1427,7 @@ async function exploreRun($: EngineInterface, ctx: Ctx, request: ExploreRequest,
 
     return exploreText(result.stdout ?? '', await agentsOnDisk($, ctx))
   } finally {
+    await jobEnd($, job)
     ctx.agentIndex = undefined // agents and features were written
     ctx.isDirty = true
     await poll($, ctx)
@@ -1738,6 +1761,103 @@ async function confirmNow($: EngineInterface, ctx: Ctx): Promise<void> {
 }
 
 // ══ feature: progress (generate / explore lanes) ═════════════════════════════
+
+/** How often a job's elapsed time redraws and the disk is looked at. */
+const JOB_TICK_MS = 1_000
+
+/**
+ * The job this load is watching: what was on disk when it started, which
+ * feature each touched scenario file belongs to, and its timer. One job is
+ * drawn at a time; a second one started meanwhile takes the lanes over.
+ */
+type JobWatch = { job: RookJob; agentDir?: string; before: Set<string>; owners: Map<string, string | undefined>; timer?: Timer; isLooking: boolean }
+
+let jobWatch: JobWatch | undefined
+
+/** Sets `jobAtom` for a generate or explore about to start, and starts watching the disk for it. */
+async function jobBegin($: EngineInterface, ctx: Ctx, kind: RookJob['kind'], label: string, source: NonNullable<RookJob['source']>): Promise<JobWatch> {
+  const now = await $.clock.now()
+  const io = ioOf($, ctx)
+  const agentDir = kind === 'generate' ? (ctx.located ?? (await where($, ctx)))?.agentDir : undefined
+  const keys = kind === 'generate' ? (agentDir === undefined ? [] : await scenarioKeys(io, agentDir)) : (await featureEntries(io)).map(entry => entry.key)
+  const watch: JobWatch = { job: newJob(kind, label, now, source), ...(agentDir !== undefined && { agentDir }), before: new Set(keys), owners: new Map(), isLooking: false }
+
+  jobWatch?.timer?.cancel()
+  jobWatch = watch
+  await update($, jobAtom, () => watch.job)
+  watch.timer = $.clock.every(JOB_TICK_MS, () => jobLook($, ctx, watch))
+
+  return watch
+}
+
+/** One line rook printed, folded into the job it belongs to. */
+async function jobLine($: EngineInterface, watch: JobWatch, line: string): Promise<void> {
+  // Called unawaited from the stream loop: nothing here may reject.
+  try {
+    const now = await $.clock.now()
+
+    if (jobWatch === watch) {
+      watch.job = jobFromLine(watch.job, line, now)
+      await update($, jobAtom, () => watch.job)
+    }
+  } catch {
+    // a line that could not be drawn is only a line
+  }
+}
+
+/** Each tick: what the disk says was written, and the elapsed time moved on. */
+async function jobLook($: EngineInterface, ctx: Ctx, watch: JobWatch): Promise<void> {
+  if (jobWatch !== watch || watch.isLooking) {
+    return
+  }
+
+  watch.isLooking = true
+
+  try {
+    const io = ioOf($, ctx)
+    const entries =
+      watch.job.kind === 'generate'
+        ? watch.agentDir === undefined
+          ? []
+          : await scenarioEntries(io, watch.agentDir, watch.before, watch.job.startedAt, watch.owners)
+        : await featureEntries(io)
+    const now = await $.clock.now()
+
+    if (jobWatch === watch) {
+      watch.job = jobFromDisk(watch.job, watch.before, entries, now)
+      await update($, jobAtom, () => watch.job)
+      await update($, tickAtom, () => now)
+    }
+  } finally {
+    watch.isLooking = false
+  }
+}
+
+/** The command ended, however it ended: the lanes go. */
+async function jobEnd($: EngineInterface, watch: JobWatch): Promise<void> {
+  watch.timer?.cancel()
+
+  if (jobWatch === watch) {
+    jobWatch = undefined
+    await update($, jobAtom, () => null)
+  }
+}
+
+/**
+ * The stored job, if this load is the one running it. `$.state` outlives a
+ * reload and the watcher does not, so a job left behind by a reload mid-run
+ * would otherwise be drawn forever.
+ */
+function liveJob(job: RookJob | null): RookJob | null {
+  return jobWatch === undefined ? null : job
+}
+
+/** What the lanes are titled: the agent, and the instruction when there is one. */
+function jobLabel(ctx: Ctx, kind: RookJob['kind'], instruction: string | undefined): string {
+  const what = kind === 'generate' ? `scenarios for ${ctx.located?.agentId ?? 'the active agent'}` : 'this repository'
+
+  return instruction === undefined || instruction.trim() === '' ? what : `${what} — ${clip(instruction, 60)}`
+}
 // ══ end feature: progress ════════════════════════════════════════════════════
 
 // ══ feature: health (Unable to Verify fixer, cancel, run confirm) ════════════
@@ -3083,7 +3203,16 @@ export const register: Register = (on, options) => {
     const running = await read($, runningAtom)
 
     if (running === null || running.source !== 'tool') {
-      return next(e)
+      // Claude waiting on a generate or explore: where it is, instead of the word.
+      const job = liveJob(await read($, jobAtom))
+
+      if (job === null || job.source !== 'tool') {
+        return next(e)
+      }
+
+      await read($, tickAtom)
+
+      return next({ ...e, props: { ...e.props, message: jobSpinnerText(job, await $.clock.now()) } })
     }
 
     await read($, tickAtom)
@@ -3113,8 +3242,8 @@ export const register: Register = (on, options) => {
     const width = Math.max(20, e.props.bodyColumns)
 
     // ── pane seam: progress
-    const job = await read($, jobAtom)
-    const jobView = job === null ? null : <JobLanes el={el} job={job} now={now} />
+    const job = liveJob(await read($, jobAtom))
+    const jobView = job === null ? null : <JobLanes el={el} job={job} now={now} width={width} />
     // ── end pane seam: progress
 
     const confirmView =

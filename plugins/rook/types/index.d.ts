@@ -150,10 +150,10 @@ export type RookConfirm =
   | { action: 'profile-test'; profile?: string; label: string; credits?: number }
 
 /** One step of a generate or explore in flight: a feature being planned, a scenario being written. */
-export type RookJobLane = { id: string; label: string; phase: string; since: number }
+export type RookJobLane = { id: string; label: string; phase: string; since: number; planned?: number; done?: number }
 
 /** A generate or explore in flight, for the pane's lanes and the spinner. */
-export type RookJob = { kind: 'generate' | 'explore'; label: string; startedAt: number; lanes: RookJobLane[]; last?: string; done?: number; planned?: number }
+export type RookJob = { kind: 'generate' | 'explore'; label: string; startedAt: number; lanes: RookJobLane[]; last?: string; done?: number; planned?: number; source?: 'tool' | 'background' }
 
 /** One finished run, for the Runs tab and the status line's trend. */
 export type RookRunSummary = {
