@@ -73,17 +73,38 @@ export function gapText(row: RookScenarioRow, max: number): string {
 }
 
 /** The status line's text; Claude Code shows it after the plugin's name. */
-export function statusLine(snapshot: RookSnapshot | null, isRunning: boolean): string | undefined {
+/**
+ * One piece of the status line. `rank` 0 is never dropped; a higher rank is
+ * shortened to `short`, then dropped, before a lower one when the line is too long.
+ * `glue` joins it to the piece before (` · ` unless set).
+ */
+export type StatusPart = { text: string; rank: number; short?: string; glue?: string }
+
+/** Joins parts as the status line shows them. */
+export const joinParts = (parts: readonly StatusPart[]): string =>
+  parts.map((part, i) => (i === 0 ? part.text : `${part.glue ?? ' · '}${part.text}`)).join('')
+
+/**
+ * The score's own parts: progress while a run is in flight (with `eta` after
+ * the lane), otherwise every scenario's latest verdict with the `trend` beside it.
+ */
+export function statusParts(snapshot: RookSnapshot | null, isRunning: boolean, extra: { eta?: string; trend?: string } = {}): StatusPart[] {
   const run = snapshot?.latest
 
   if (run === undefined || snapshot === null) {
-    return isRunning ? '▸ starting' : undefined
+    return isRunning ? [{ text: '▸ starting', rank: 0 }] : []
   }
 
   if (!run.finished) {
     const lane = run.lanes[0]
+    const doing = lane ? `${lane.id} ${lane.phase}` : isReporting(run) ? REPORTING : undefined
 
-    return `▸ ${run.done}/${run.planned}${lane ? ` · ${lane.id} ${lane.phase}` : isReporting(run) ? ` · ${REPORTING}` : ''} · ✓${run.counts.pass} ✗${run.counts.fail} ?${run.counts.unverifiable}`
+    return [
+      { text: `▸ ${run.done}/${run.planned}`, rank: 0 },
+      ...(doing === undefined ? [] : [{ text: doing, rank: 5 }]),
+      ...(extra.eta === undefined ? [] : [{ text: extra.eta, rank: 4 }]),
+      { text: `✓${run.counts.pass} ✗${run.counts.fail} ?${run.counts.unverifiable}`, rank: 0 },
+    ]
   }
 
   const { pass, fail, unverifiable } = countsOf(snapshot.current)
@@ -91,7 +112,18 @@ export function statusLine(snapshot: RookSnapshot | null, isRunning: boolean): s
   const { fixed, regressed } = changesIn(snapshot.current, run.runId)
   const moved = [fixed.length > 0 ? `↑${fixed.length} fixed` : '', regressed.length > 0 ? `↓${regressed.length} regressed` : ''].filter(Boolean).join(' ')
 
-  return `✓${pass} ✗${fail} ?${unverifiable}${gaps > 0 ? ` · ${plural(gaps, 'gap')}` : ''}${moved ? ` · ${moved}` : ''}`
+  return [
+    { text: `✓${pass} ✗${fail} ?${unverifiable}`, rank: 0 },
+    ...(extra.trend === undefined ? [] : [{ text: extra.trend, rank: 8, glue: ' ' }]),
+    ...(gaps > 0 ? [{ text: plural(gaps, 'gap'), rank: 9 }] : []),
+    ...(moved ? [{ text: moved, rank: 6 }] : []),
+  ]
+}
+
+export function statusLine(snapshot: RookSnapshot | null, isRunning: boolean): string | undefined {
+  const parts = statusParts(snapshot, isRunning)
+
+  return parts.length === 0 ? undefined : joinParts(parts)
 }
 
 /** Every scenario judged, report.yaml not written yet: rook is summarising the run. */

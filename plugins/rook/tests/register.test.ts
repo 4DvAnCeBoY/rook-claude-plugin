@@ -128,7 +128,7 @@ describe('2 · the pane', () => {
 
     expect(await ui.find({ text: /2\/3 running/ })).toBeDefined()
     expect((await ui.find({ key: 'l-SC-007' }))?.text).toContain('starting')
-    expect(world.statuses.at(-1)).toBe('▸ 2/3 · SC-007 starting · ✓1 ✗1 ?0')
+    expect(world.statuses.at(-1)).toBe('▸ 2/3 · SC-007 starting · <1m left · ✓1 ✗1 ?0')
   })
 
   test('a Fail from an earlier run that the latest run did not cover stays visible, and Re-run failed includes it', async ($, on) => {
@@ -434,7 +434,7 @@ describe('4 · failures of a run started elsewhere', () => {
     // hooks: their text is held in logic.test.ts, the append in a live session.
     expect(world.toasts).toEqual([`rook: run ${FRESH_RUN} finished — 0 Pass · 1 Fail · 0 Unable to Verify`])
     // a one-scenario run moves one row: the agent is still 1 / 1 / 1, not "down one"
-    expect(world.statuses.at(-1)).toBe('✓1 ✗1 ?1')
+    expect(world.statuses.at(-1)).toBe('✓1 ✗1 ?1 ▁▅▁')
   })
 
   test('a workspace that appears mid-session brings old runs, not news', async ($, on) => {
