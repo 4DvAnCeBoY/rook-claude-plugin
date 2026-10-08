@@ -147,6 +147,7 @@ describe('2 · the pane', () => {
 
     freshRun(world, { 'SC-004': VERDICT_PASS_GAP.replace('SC-002', 'SC-004') }, [1, 0, 0])
     await ui.press({ key: 'rerun-failed' })
+    await ui.press({ key: 'confirm-yes' })
     await clock.advance(10)
 
     expect(world.invocations.at(-1)).toEqual(['rook', 'run', '--yes', '--json', '--only', 'SC-004'])
@@ -201,6 +202,7 @@ describe('2 · the pane', () => {
 
     freshRun(world, { 'SC-004': VERDICT_PASS_GAP.replace('SC-002', 'SC-004') }, [1, 0, 0])
     await ui.press({ key: 'rerun-failed' })
+    await ui.press({ key: 'confirm-yes' })
     await clock.advance(10)
 
     expect(world.invocations.at(-1)).toEqual(['rook', 'run', '--yes', '--json', '--only', 'SC-004'])
