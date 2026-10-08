@@ -81,6 +81,10 @@ import type { RookLens } from '../types'
 // ── end imports: trends
 
 // ── imports: live
+import { freshnessText, isInFlight, isOwnRun, justJudged, liveHeadline, nextLive, runBandText } from './live'
+import type { LiveState } from './live'
+import { etaMs } from './statusline'
+import { LiveBlock, NewFailBand, RunBand } from './views/live'
 // ── end imports: live
 
 // ── imports: keys
@@ -258,6 +262,7 @@ const verdictsAtom = atom({ plugin: 'rook', key: 'verdicts' } as const, [])
 // ── end atoms: trends
 
 // ── atoms: live
+const liveAtom = atom({ plugin: 'rook', key: 'live' } as const, null)
 // ── end atoms: live
 
 // ── atoms: keys
@@ -462,6 +467,9 @@ async function where($: EngineInterface, ctx: Ctx): Promise<Located | undefined>
 
 // 5 · the status line
 async function showStatus($: EngineInterface, ctx: Ctx): Promise<void> {
+  // Every poll ends here: the run in flight and the one that landed are folded in first, line or not.
+  const live = await liveTrack($, ctx)
+
   if (!ctx.isStatusLine) {
     return
   }
@@ -470,6 +478,11 @@ async function showStatus($: EngineInterface, ctx: Ctx): Promise<void> {
 
   // A workspace that cannot run yet says which step is missing; outside one, nothing.
   const line = composeStatus({
+    lens: await read($, lensAtom),
+    live,
+    verdicts: await read($, verdictsAtom),
+    rowAt: rowAtOf(ctx),
+    ...(sourceStampsNow(ctx) !== undefined && { stamps: sourceStampsNow(ctx)! }),
     snapshot,
     running: await read($, runningAtom),
     stale: await read($, staleAtom),
@@ -3003,6 +3016,74 @@ async function ciAnswer($: EngineInterface, ctx: Ctx, request: CiRequest): Promi
 // ══ end feature: trends ══════════════════════════════════════════════════════
 
 // ══ feature: live (run band, streamed results, stale verdicts, status line) ══
+
+/** Fold the latest poll into `live`: whose run is in flight, its verdicts' order, a landing and its new failures. */
+async function liveTrack($: EngineInterface, ctx: Ctx): Promise<LiveState | null> {
+  const snapshot = await read($, snapshotAtom)
+  const prev = await read($, liveAtom)
+  const next = nextLive(prev, {
+    ...(snapshot?.agentId !== undefined && { agentId: snapshot.agentId }),
+    ...(snapshot?.latest !== undefined && { latest: snapshot.latest }),
+    current: snapshot?.current ?? [],
+    running: await read($, runningAtom),
+    isPrimed: ctx.isPrimed,
+    now: await $.clock.now(),
+  })
+
+  if (next !== prev) {
+    await update($, liveAtom, () => next)
+  }
+
+  return next
+}
+
+/** A scenario's row as a run judged it, when this load has read it. */
+function rowAtOf(ctx: Ctx): (runId: string, id: string) => RookScenarioRow | undefined {
+  return (runId, id) => ctx.rows.get(`${runId}/${id}`)
+}
+
+/** The run band's and the new-failure band's Open: the pane, focused, on its first tab. */
+async function liveOpen($: EngineInterface): Promise<void> {
+  await openPane($, { focus: true, tab: 'health' }).catch(() => undefined)
+}
+
+/** The new-failure band's Dismiss. */
+async function liveDismiss($: EngineInterface): Promise<void> {
+  await update($, liveAtom, s => {
+    if (s === null || s.newFail === undefined) {
+      return s
+    }
+
+    const { newFail: _gone, ...rest } = s
+
+    return rest
+  })
+}
+
+/** The band above the prompt for a run in flight, or a run from elsewhere that broke what passed; undefined for neither. */
+async function liveBand($: EngineInterface, ctx: Ctx, e: RenderInput<'AbovePrompt'>): Promise<RenderElement | undefined> {
+  const running = await read($, runningAtom)
+  const run = (await read($, snapshotAtom))?.latest
+  const el = $.ui.resolve(e) as unknown as El
+
+  if (running !== null || (run !== undefined && !run.finished)) {
+    await read($, tickAtom)
+
+    return (
+      <RunBand
+        el={el}
+        text={runBandText(run?.finished ? undefined : run, running, await $.clock.now())}
+        canCancel={running !== null && running.source !== 'tool'}
+        onOpen={() => liveOpen($)}
+        onCancel={() => cancelRun($, ctx)}
+      />
+    )
+  }
+
+  const newFail = (await read($, liveAtom))?.newFail
+
+  return newFail === undefined ? undefined : <NewFailBand el={el} newFail={newFail} onOpen={() => liveOpen($)} onDismiss={() => liveDismiss($)} />
+}
 // ══ end feature: live ════════════════════════════════════════════════════════
 
 // ══ feature: keys (focus, hotkeys, fresh repo, setup toggles) ════════════════
@@ -3566,11 +3647,37 @@ export const register: Register = (on, options) => {
       )
     }
 
+    // ── pane seam: live (the run in flight above every tab, the header's freshness)
+    const live = await read($, liveAtom)
+    const liveRun = snapshot.latest !== undefined && !snapshot.latest.finished ? snapshot.latest : undefined
+    const freshness = freshnessText(isInFlight(snapshot, running, job !== null), snapshot.checkedAt, now)
+    let liveView: unknown = null
+
+    if (running !== null || liveRun !== undefined) {
+      const eta = liveRun === undefined ? undefined : etaMs(liveRun, running, now, ctx.statusTrend?.points ?? [])
+
+      liveView = (
+        <LiveBlock
+          el={el}
+          headline={liveHeadline({ ...(liveRun !== undefined && { run: liveRun }), running, isOwn: liveRun !== undefined && isOwnRun(live, liveRun.runId), now, ...(eta !== undefined && { eta }) })}
+          lanes={liveRun?.lanes ?? []}
+          judged={liveRun === undefined ? [] : justJudged({ run: liveRun, live, verdicts: await read($, verdictsAtom), stale: await read($, staleAtom) })}
+          now={now}
+          width={width}
+          canCancel={running !== null && running.source !== 'tool'}
+          onOpen={id => (liveRun === undefined ? undefined : openDetail($, ctx, liveRun.runId, id))}
+          onCancel={() => cancelRun($, ctx)}
+        />
+      )
+    }
+    // ── end pane seam: live
+
     const header = (
       <Text bold wrap="truncate-end">
         rook · {snapshot.agentId ?? ''}
         {snapshot.profileId ? <Text dimColor> · profile {snapshot.profileId}</Text> : ''}
         {balance !== undefined ? <Text dimColor> · {balance}</Text> : ''}
+        {freshness !== undefined ? <Text color={freshness.startsWith('●') ? 'green' : undefined} dimColor={!freshness.startsWith('●')}> · {freshness}</Text> : ''}
       </Text>
     )
     const frame = (body: unknown) => (
@@ -3580,6 +3687,8 @@ export const register: Register = (on, options) => {
         {failedBefore}
         {jobView}
         {confirmView}
+        {/* ── pane seam: live */}
+        {liveView as never}
         {body as never}
       </Box>
     )
@@ -3996,7 +4105,18 @@ export const register: Register = (on, options) => {
 
   // 3 · the re-test band
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (!ctx.isRetestBand || e.props.hasSurvey) {
+    if (e.props.hasSurvey) {
+      return next(e)
+    }
+
+    // A run in flight, or a run from elsewhere that broke what passed, takes the band over (feature: live).
+    const liveShown = await liveBand($, ctx, e)
+
+    if (liveShown !== undefined) {
+      return liveShown
+    }
+
+    if (!ctx.isRetestBand) {
       return next(e)
     }
 

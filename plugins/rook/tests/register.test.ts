@@ -44,7 +44,7 @@ describe('session start', () => {
     expect(world.commands).toEqual(['rook'])
     expect(world.tools.sort()).toEqual(['agent', 'ci', 'compare', 'curate', 'explore', 'generate', 'profile_test', 'project', 'report', 'run', 'runs', 'scenarios', 'status', 'sync'])
     expect(world.opened).toEqual(['rook'])
-    expect(world.statuses.at(-1)).toBe('✓1 ✗1 ?1 · 2 gaps · ↑1 fixed')
+    expect(world.statuses.at(-1)).toBe('✓1 ✗1 ?1 33% · 1 blocker')
   })
 
   test('outside a workspace nothing opens and the status line stays empty', async ($, on) => {
@@ -128,7 +128,7 @@ describe('2 · the pane', () => {
 
     expect(await ui.find({ text: /2\/3 running/ })).toBeDefined()
     expect((await ui.find({ key: 'l-SC-007' }))?.text).toContain('starting')
-    expect(world.statuses.at(-1)).toBe('▸ 2/3 · SC-007 starting · <1m left · ✓1 ✗1 ?0')
+    expect(world.statuses.at(-1)).toBe('◐ elsewhere 2/3 ✗1 · SC-007 starting · ETA <1m')
   })
 
   test('a Fail from an earlier run that the latest run did not cover stays visible, and Re-run failed includes it', async ($, on) => {
@@ -160,7 +160,7 @@ describe('2 · the pane', () => {
     const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE.props, requestId: 'rook', viewport: PANE.viewport })
 
     expect(await ui.find({ text: /3\/3 writing the report/ })).toBeDefined()
-    expect(world.statuses.at(-1)).toBe('▸ 3/3 · writing the report · ✓1 ✗1 ?1')
+    expect(world.statuses.at(-1)).toBe('◐ elsewhere 3/3 ✗1 · writing the report')
   })
 
   test('a workspace with scenarios and no runs says how many are waiting', async ($, on) => {
@@ -424,7 +424,7 @@ describe('4 · failures of a run started elsewhere', () => {
     world.files.set(`${AGENT_DIR}/runs/${FRESH_RUN}/scenarios/SC-004/verdict.yaml`, VERDICT_FAIL.replaceAll(NEW_RUN, FRESH_RUN))
     await clock.advance(3_000)
 
-    expect(world.statuses.at(-1)).toBe('▸ 1/1 · writing the report · ✓0 ✗1 ?0')
+    expect(world.statuses.at(-1)).toBe('◐ elsewhere 1/1 ✗1 · writing the report')
     expect(world.appended).toEqual([])
 
     world.files.set(`${AGENT_DIR}/runs/${FRESH_RUN}/report.yaml`, reportYaml(FRESH_RUN, 0, 1, 0, 2))
@@ -435,8 +435,8 @@ describe('4 · failures of a run started elsewhere', () => {
     // through $.session.append, which the kit does not route to a test's
     // hooks: their text is held in logic.test.ts, the append in a live session.
     expect(world.toasts).toEqual([`run ${FRESH_RUN} finished — 0 Pass · 1 Fail · 0 Unable to Verify`])
-    // a one-scenario run moves one row: the agent is still 1 / 1 / 1, not "down one"
-    expect(world.statuses.at(-1)).toBe('✓1 ✗1 ?1 ▁▅▁')
+    // just landed: the run's own counts, how long ago, and what still fails in it
+    expect(world.statuses.at(-1)).toBe('✗ 0/1 <1m ago · ✗ SC-004')
   })
 
   test('a workspace that appears mid-session brings old runs, not news', async ($, on) => {
@@ -451,7 +451,7 @@ describe('4 · failures of a run started elsewhere', () => {
     await clock.advance(3_000)
 
     expect(world.toasts).toEqual([])
-    expect(world.statuses.at(-1)).toBe('✓1 ✗1 ?1 · 2 gaps · ↑1 fixed')
+    expect(world.statuses.at(-1)).toBe('✓1 ✗1 ?1 33% · 1 blocker')
 
     world.files.set(`${AGENT_DIR}/runs/${FRESH_RUN}/run.yaml`, runYaml(FRESH_RUN, 'next', ['SC-004']))
     world.files.set(`${AGENT_DIR}/runs/${FRESH_RUN}/scenarios/SC-004/verdict.yaml`, VERDICT_FAIL)

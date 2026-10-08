@@ -405,6 +405,23 @@ declare module 'claude-code' {
       // ── end feature: trends
 
       // ── feature: live (run band, streamed results, stale verdicts, status line states)
+      /** The run in flight and the one that just landed: whose it is, its verdicts' arrival order, new failures of a run from elsewhere (hooks/live.ts). */
+      live: {
+        agentId?: string
+        /** The newest run accounted for: a run landing with another id is news. */
+        known?: string
+        /** Runs seen in flight while this session had one running. */
+        own: string[]
+        isOwnActive?: boolean
+        /** Until when a landing still counts as this session's run (ms), after `running` cleared. */
+        ownGrace?: number
+        /** The run in flight's verdicts in the order they arrived, newest first. */
+        judged?: { runId: string; ids: string[] }
+        /** The newest run this session saw land, and when. */
+        landed?: { runId: string; at: number; isOwn: boolean }
+        /** A run started elsewhere landed with scenarios that passed before: shown until dismissed. */
+        newFail?: { runId: string; rows: { id: string; title: string; status: RookStatus }[] }
+      } | null
       // ── end feature: live
 
       // ── feature: keys (focus, hotkeys, fresh repo, setup toggles)
