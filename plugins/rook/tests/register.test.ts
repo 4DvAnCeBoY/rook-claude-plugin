@@ -42,7 +42,7 @@ describe('session start', () => {
     const { world } = await start($, on, workspace())
 
     expect(world.commands).toEqual(['rook'])
-    expect(world.tools.sort()).toEqual(['agent', 'curate', 'explore', 'generate', 'profile_test', 'project', 'report', 'run', 'runs', 'scenarios', 'status'])
+    expect(world.tools.sort()).toEqual(['agent', 'ci', 'curate', 'explore', 'generate', 'profile_test', 'project', 'report', 'run', 'runs', 'scenarios', 'status'])
     expect(world.opened).toEqual(['rook'])
     expect(world.statuses.at(-1)).toBe('✓1 ✗1 ?1 · 2 gaps · ↑1 fixed')
   })
