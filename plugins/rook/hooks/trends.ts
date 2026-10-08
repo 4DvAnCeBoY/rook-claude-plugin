@@ -1,6 +1,6 @@
 import type { RookRunSummary, RookScenarioRow, RookStatus, RookVerdictHistory } from '../types'
 import { historyRuns, VERDICT_RUNS } from './evidence'
-import { trustedRate } from './owner'
+import { isFlaky, trustedRate } from './owner'
 import { readRun, RUN_ID, SCENARIO_ID } from './workspace'
 import type { Io, RowCache } from './workspace'
 import { isMap, num, parseMap } from './yaml'
@@ -49,9 +49,7 @@ export const TREND_COLOR: Record<ScenarioTrend, string> = { flaky: 'yellow', reg
 export function trendOf(statuses: readonly RookStatus[]): ScenarioTrend | undefined {
   const recent = statuses.slice(-VERDICT_RUNS)
   const decided = recent.filter(s => s !== 'Unable to Verify')
-  const flips = decided.slice(1).filter((s, i) => s !== decided[i]).length
-
-  if (flips >= 2) {
+  if (isFlaky(recent)) {
     return 'flaky'
   }
 

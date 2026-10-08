@@ -19,7 +19,7 @@ import {
   jobText,
   msPerScenario,
   sparkline,
-  trendOf,
+  recentRuns,
   trendText,
 } from '../hooks/statusline'
 import type { StatusInput, TrendPoint } from '../hooks/statusline'
@@ -104,7 +104,7 @@ describe('status line · trend', () => {
     expect(composeStatus(input({ trend: points(0.3, 0.6, 0.8) }))).toBe('✓4 ✗0 ?3 57% ▃▅▇')
   })
 
-  test('trendOf: finished, non-test runs from disk, oldest first', async () => {
+  test('recentRuns: finished, non-test runs from disk, oldest first', async () => {
     const fresh = '2026-09-29T09-00-00Z'
     const test = '2026-09-29T10-00-00Z'
     const files = workspace({
@@ -114,7 +114,7 @@ describe('status line · trend', () => {
       [`${AGENT_DIR}/runs/${test}/report.yaml`]: reportYaml(test, 0, 1, 0, 0),
     })
     const io = ioOver(files)
-    const trend = await trendOf(io, AGENT_DIR, await runIds(io, AGENT_DIR))
+    const trend = await recentRuns(io, AGENT_DIR, await runIds(io, AGENT_DIR))
 
     expect(trend.map(point => [point.passRate, point.executed, point.credits, point.durationMs])).toEqual([
       [0, 2, 3, 64_000],
@@ -122,7 +122,7 @@ describe('status line · trend', () => {
       [1, 1, 2, 64_000],
     ])
     expect(trendText(trend)).toBe('▁▅█')
-    expect(await trendOf(io, AGENT_DIR, await runIds(io, AGENT_DIR), 2)).toHaveLength(2)
+    expect(await recentRuns(io, AGENT_DIR, await runIds(io, AGENT_DIR), 2)).toHaveLength(2)
   })
 })
 

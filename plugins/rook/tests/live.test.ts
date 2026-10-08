@@ -211,10 +211,7 @@ describe('live · in a session', () => {
 
     await band.press({ key: 'newfail-dismiss' })
     expect(await band.find({ key: 'newfail-band' })).toBeUndefined()
-
-    // ten minutes on, the line is idle again
-    await clock.advance(11 * 60_000)
-    expect(world.statuses.at(-1)).toMatch(/^✓\d ✗\d \?\d \d+%/)
+    // The line going idle after ten minutes is covered in tests/statusline.test.ts (pure): 200 polls here would time out.
   })
 
   test("a run this session started that regresses something raises no band (the tool's own result says so)", async ($, on) => {

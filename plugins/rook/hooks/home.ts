@@ -1,7 +1,7 @@
 import type { RookOwner, RookRunView, RookScenarioRow, RookStatus, RookVerdictHistory } from '../types'
 import { clip, excerpt } from './format'
-import { OWNER_LABEL, ownerOf, trustedRate } from './owner'
-import { runStartMs, verdictsBefore } from './changes'
+import { isFlaky as flakyRule, OWNER_LABEL, ownerOf, trustedRate } from './owner'
+import { lastFullGreenRun, runStartMs, verdictsBefore } from './changes'
 import { compareRunIds } from './workspace'
 import type { Io } from './workspace'
 import { parseMap, str } from './yaml'
@@ -71,7 +71,8 @@ export function recentOf(verdicts: readonly RookVerdictHistory[], id: string, n 
 /** How many times the verdict changed from one run to the next. */
 export const flipsOf = (statuses: readonly RookStatus[]): number => statuses.filter((status, at) => at > 0 && status !== statuses[at - 1]).length
 
-export const isFlaky = (statuses: readonly RookStatus[]): boolean => flipsOf(statuses.slice(-MINI_RUNS)) >= FLAKY_FLIPS
+/** The shared flaky rule (hooks/owner.ts), so Release, Trends, the drill-down and the status line agree. */
+export const isFlaky = (statuses: readonly RookStatus[]): boolean => flakyRule(statuses)
 
 /** `✓✗✓?`: one glyph per run, oldest first. */
 export const miniHistory = (statuses: readonly RookStatus[]): string => statuses.map(status => STATUS_ICON[status]).join('')
@@ -245,10 +246,10 @@ export function isGreenRun(verdicts: readonly RookVerdictHistory[], runId: strin
 
 export function lastGreenOf(verdicts: readonly RookVerdictHistory[]): string | undefined {
   const runs = runsOf(verdicts)
-  const green = runs.filter(r => r.statuses.size > 0 && [...r.statuses.values()].every(s => s === 'Pass')).at(-1)
+  const green = lastFullGreenRun(verdicts)
 
   if (green !== undefined) {
-    return green.runId
+    return green
   }
 
   const firstRegression = runs.findIndex(r =>

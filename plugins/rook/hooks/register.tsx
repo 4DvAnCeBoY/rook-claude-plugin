@@ -51,7 +51,7 @@ import { RetestBand } from './views/band'
 
 // ── imports: status line
 import { elapsed as liveTime } from './format'
-import { composeStatus, trendOf } from './statusline'
+import { composeStatus, recentRuns } from './statusline'
 import type { TrendPoint } from './statusline'
 // ── end imports: status line
 
@@ -385,6 +385,8 @@ type Ctx = {
   lensDefault: RookLens
   /** The runs the verdict history was last read from, to skip re-reading when nothing changed. */
   verdictSignature?: string
+  /** Verdict statuses by file path, for the history: a verdict is written once. */
+  verdictCache?: Map<string, RookStatus>
   /** feature: keys — the fresh-repo scan and the settings /config would not keep. */
   keys?: KeysCache
 }
@@ -1972,7 +1974,8 @@ async function refreshVerdicts($: EngineInterface, ctx: Ctx): Promise<void> {
     }
 
     ctx.verdictSignature = signature
-    const verdicts = await verdictHistory(io, loc.agentDir, ids)
+    ctx.verdictCache ??= new Map()
+    const verdicts = await verdictHistory(io, loc.agentDir, ids, undefined, ctx.verdictCache)
 
     await update($, verdictsAtom, () => verdicts)
   } catch {
@@ -2914,7 +2917,7 @@ async function statusTrend($: EngineInterface, ctx: Ctx, snapshot: RookSnapshot 
   if (ctx.statusTrend?.key !== key) {
     const io = ioOf($, ctx)
 
-    ctx.statusTrend = { key, points: await trendOf(io, loc.agentDir, await runIds(io, loc.agentDir)) }
+    ctx.statusTrend = { key, points: await recentRuns(io, loc.agentDir, await runIds(io, loc.agentDir)) }
   }
 
   return ctx.statusTrend.points

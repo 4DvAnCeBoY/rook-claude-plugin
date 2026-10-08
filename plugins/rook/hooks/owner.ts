@@ -106,4 +106,19 @@ export function trustedRate(rows: readonly RookScenarioRow[]): number | undefine
   return rows.length === 0 ? undefined : rows.filter(isTrustedPass).length / rows.length
 }
 
+/** Pass and Fail swapping places this many times in the window makes a scenario flaky. */
+export const FLAKY_FLIPS = 2
+export const FLAKY_WINDOW = 8
+
+/**
+ * The one flaky rule every view uses: Pass and Fail swap places twice or more
+ * in the last 8 verdicts. Unable to Verify says nothing about the agent, so it
+ * neither makes nor breaks a flip.
+ */
+export function isFlaky(statuses: readonly RookStatus[]): boolean {
+  const decided = statuses.slice(-FLAKY_WINDOW).filter(s => s !== 'Unable to Verify')
+
+  return decided.filter((s, at) => at > 0 && s !== decided[at - 1]).length >= FLAKY_FLIPS
+}
+
 const clipped = (text: string): string => (text.length > 160 ? `${text.slice(0, 157)}…` : text)

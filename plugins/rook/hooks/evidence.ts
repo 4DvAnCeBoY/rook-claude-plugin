@@ -212,7 +212,14 @@ const statusLine = (text: string): RookStatus | undefined => statusOf(/^status:\
  * (`ids` newest first), oldest first per scenario. Skipped scenarios have no
  * entry for that run.
  */
-export async function verdictHistory(io: Io, agentDir: string, ids: readonly string[], limit = VERDICT_RUNS): Promise<RookVerdictHistory[]> {
+export async function verdictHistory(
+  io: Io,
+  agentDir: string,
+  ids: readonly string[],
+  limit = VERDICT_RUNS,
+  /** Statuses by verdict path: rook writes a verdict once, so a file read is never read again. */
+  cache?: Map<string, RookStatus>,
+): Promise<RookVerdictHistory[]> {
   const byId = new Map<string, { runId: string; status: RookStatus }[]>()
   let used = 0
 
@@ -226,8 +233,18 @@ export async function verdictHistory(io: Io, agentDir: string, ids: readonly str
     let judged = 0
 
     for (const { name } of scenarios) {
-      const text = await io.read(`${dir}/${name}/verdict.yaml`)
-      const status = text === undefined ? undefined : statusLine(text)
+      const path = `${dir}/${name}/verdict.yaml`
+      let status = cache?.get(path)
+
+      if (status === undefined) {
+        const text = await io.read(path)
+
+        status = text === undefined ? undefined : statusLine(text)
+
+        if (status !== undefined) {
+          cache?.set(path, status)
+        }
+      }
 
       if (status !== undefined) {
         judged++

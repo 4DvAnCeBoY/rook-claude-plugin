@@ -1,7 +1,7 @@
 import type { RookCluster, RookEvidence, RookLens, RookOwner, RookPhase, RookScenarioRow, RookStatus, RookVerdictHistory } from '../types'
 import { changedSince, lastPassRun, runStartMs, verdictsBefore } from './changes'
 import { duration } from './format'
-import { ownerOf } from './owner'
+import { isFlaky, ownerOf } from './owner'
 import type { OwnerVerdict } from './owner'
 
 /**
@@ -102,15 +102,7 @@ export const isRegressed = (status: RookStatus | undefined, before: readonly Roo
 
 /** The verdict flipped between Pass and not-Pass at least twice: it does not hold still. */
 export function isFlip(statuses: readonly RookStatus[]): boolean {
-  let flips = 0
-
-  for (let at = 1; at < statuses.length; at += 1) {
-    if ((statuses[at] === 'Pass') !== (statuses[at - 1] === 'Pass')) {
-      flips += 1
-    }
-  }
-
-  return flips >= 2
+  return isFlaky(statuses)
 }
 
 /** The cluster of `runId` that holds the scenario and names a fault (report.yaml after `--rca`). */

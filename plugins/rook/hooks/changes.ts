@@ -27,6 +27,30 @@ export function verdictsBefore(history: readonly RookVerdictHistory[], id: strin
   return (at < 0 ? runs : runs.slice(0, at)).map(r => r.status)
 }
 
+/**
+ * The newest run in which every scenario it judged passed and that judged as
+ * many scenarios as the widest run in the window: a `--only SC-001` pass is
+ * not a green run for the whole agent. The baseline the status line and the
+ * My change view both measure from.
+ */
+export function lastFullGreenRun(history: readonly RookVerdictHistory[]): string | undefined {
+  const byRun = new Map<string, RookStatus[]>()
+
+  for (const h of history) {
+    for (const r of h.runs) {
+      byRun.set(r.runId, [...(byRun.get(r.runId) ?? []), r.status])
+    }
+  }
+
+  const widest = Math.max(0, ...[...byRun.values()].map(s => s.length))
+
+  return [...byRun]
+    .filter(([, statuses]) => statuses.length === widest && statuses.every(s => s === 'Pass'))
+    .map(([runId]) => runId)
+    .sort((a, b) => (runStartMs(a) ?? 0) - (runStartMs(b) ?? 0) || a.localeCompare(b))
+    .at(-1)
+}
+
 /** Tracked files modified after `sinceMs`, newest first. */
 export function changedSince(stamps: ReadonlyMap<string, number> | undefined, sinceMs: number | undefined): { path: string; mtimeMs: number }[] {
   if (stamps === undefined || sinceMs === undefined) {

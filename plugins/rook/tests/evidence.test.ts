@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { criteriaOf, historyRuns, phasesOf, readEvidence, verdictHistory } from '../hooks/evidence'
-import { changedSince, lastPassRun, runStartMs, verdictsBefore } from '../hooks/changes'
-import { isTrustedPass, ownerOf, trustedRate } from '../hooks/owner'
+import { changedSince, lastFullGreenRun, lastPassRun, runStartMs, verdictsBefore } from '../hooks/changes'
+import { isFlaky, isTrustedPass, ownerOf, trustedRate } from '../hooks/owner'
 import { rowOf } from '../hooks/workspace'
 import type { Io } from '../hooks/workspace'
 import type { RookScenarioRow } from '../types'
@@ -189,5 +189,26 @@ describe('changes · what changed since a scenario last passed', () => {
 
     expect(changedSince(stamps, since).map(c => c.path)).toEqual(['prompts/system.md', 'src/tools/refund.mjs'])
     expect(runStartMs('2026-10-08T09-15-00Z-2')).toBe(since)
+  })
+})
+
+describe('one rule for every view · flaky and the green baseline', () => {
+  test('flaky is Pass and Fail swapping twice in the last 8; Unable to Verify neither makes nor breaks a flip', () => {
+    expect(isFlaky(['Pass', 'Fail', 'Pass'])).toBe(true)
+    expect(isFlaky(['Pass', 'Unable to Verify', 'Pass', 'Unable to Verify'])).toBe(false)
+    expect(isFlaky(['Pass', 'Fail', 'Unable to Verify', 'Fail'])).toBe(false)
+    expect(isFlaky(['Pass', 'Fail', 'Pass', 'Pass', 'Pass', 'Pass', 'Pass', 'Pass', 'Pass', 'Pass'])).toBe(false) // the swaps fell out of the window
+  })
+
+  test('a passing --only run is not green for the whole agent', () => {
+    const full = '2026-10-08T09-00-00Z'
+    const only = '2026-10-08T10-00-00Z'
+    const history = [
+      { id: 'SC-001', runs: [{ runId: full, status: 'Pass' as const }, { runId: only, status: 'Pass' as const }] },
+      { id: 'SC-002', runs: [{ runId: full, status: 'Pass' as const }] },
+    ]
+
+    expect(lastFullGreenRun(history)).toBe(full)
+    expect(lastFullGreenRun([{ id: 'SC-001', runs: [{ runId: full, status: 'Fail' as const }] }])).toBeUndefined()
   })
 })

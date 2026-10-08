@@ -1,10 +1,10 @@
 import type { RookBudget, RookCurrent, RookJob, RookLens, RookRunning, RookRunView, RookScenarioRow, RookSnapshot, RookStale, RookStatus, RookVerdictHistory } from '../types'
-import { changedSince, lastPassRun, runStartMs, verdictsBefore } from './changes'
+import { changedSince, lastFullGreenRun, lastPassRun, runStartMs, verdictsBefore } from './changes'
 import { creditsPerScenario, joinParts, elapsed } from './format'
 import type { StatusPart } from './format'
 import { doingText, etaShort, isOwnRun, JUST_FINISHED_MS, sourceText } from './live'
 import type { LiveState } from './live'
-import { isTrustedPass, ownerOf } from './owner'
+import { isFlaky, isTrustedPass, ownerOf } from './owner'
 import { setupLine } from './readiness'
 import type { Io } from './workspace'
 import { changesIn, countsOf } from './workspace'
@@ -32,7 +32,7 @@ const BARS = '▁▂▃▄▅▆▇█'
  * The newest finished, non-test runs among `ids` (newest first), returned
  * oldest first, at most `limit`: read from report.yaml (and run.yaml's test flag).
  */
-export async function trendOf(io: Io, agentDir: string, ids: readonly string[], limit = TREND_RUNS): Promise<TrendPoint[]> {
+export async function recentRuns(io: Io, agentDir: string, ids: readonly string[], limit = TREND_RUNS): Promise<TrendPoint[]> {
   const points: TrendPoint[] = []
 
   for (const runId of ids.slice(0, limit * 3)) {
@@ -219,7 +219,7 @@ export type StatusInput = {
   balance: number | null
   budget: RookBudget | null
   job: RookJob | null
-  /** Recent finished runs, oldest first (trendOf). */
+  /** Recent finished runs, oldest first (recentRuns). */
   trend: readonly TrendPoint[]
   /** The setup checklist's next step, when the workspace cannot run yet. */
   setup?: string
@@ -262,25 +262,13 @@ export function agoText(ms: number): string {
 }
 
 /** Scenarios whose verdict changed at least `minFlips` times across recent runs. */
-export function flakyIds(verdicts: readonly RookVerdictHistory[], minFlips = 2): string[] {
-  return verdicts.filter(h => h.runs.filter((r, i) => i > 0 && r.status !== h.runs[i - 1]!.status).length >= minFlips).map(h => h.id)
+export function flakyIds(verdicts: readonly RookVerdictHistory[]): string[] {
+  return verdicts.filter(h => isFlaky(h.runs.map(r => r.status))).map(h => h.id)
 }
 
 /** The newest run in which every scenario it judged passed. */
 export function greenRun(verdicts: readonly RookVerdictHistory[]): string | undefined {
-  const byRun = new Map<string, boolean>()
-
-  for (const h of verdicts) {
-    for (const r of h.runs) {
-      byRun.set(r.runId, (byRun.get(r.runId) ?? true) && r.status === 'Pass')
-    }
-  }
-
-  return [...byRun]
-    .filter(([, isGreen]) => isGreen)
-    .map(([runId]) => runId)
-    .sort()
-    .at(-1)
+  return lastFullGreenRun(verdicts)
 }
 
 /** Current non-Pass scenarios that passed in an earlier run. */
