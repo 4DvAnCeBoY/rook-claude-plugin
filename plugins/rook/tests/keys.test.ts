@@ -375,3 +375,18 @@ describe('keys · settings in the Setup tab', () => {
     await ui.unmount()
   })
 })
+
+describe('keys · inline or docked', () => {
+  test('inline above the prompt, the pane says how to get the side pane; docked, it says nothing', async ($, on) => {
+    await start($, on, workspace())
+    const docked = await mountPane($)
+
+    expect(await docked.find({ key: 'inline-hint' })).toBeUndefined()
+    await docked.unmount()
+
+    const inline = await $.ui.mount({ plugin: 'rook', surface: 'terminal', component: 'Pane', requestId: PANE.requestId, props: { ...PANE.props, placement: 'inline' }, viewport: { ...PANE.viewport!, isFullscreen: false } } as never)
+
+    expect((await inline.find({ key: 'inline-hint' }))?.text).toContain('/tui fullscreen')
+    await inline.unmount()
+  })
+})
