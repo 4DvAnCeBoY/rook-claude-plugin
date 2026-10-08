@@ -1,5 +1,6 @@
 import type { RookOwner, RookRunView, RookScenarioRow, RookStatus, RookVerdictHistory } from '../types'
 import { clip, excerpt } from './format'
+import { gapGroups } from './health'
 import { isFlaky as flakyRule, OWNER_LABEL, ownerOf, trustedRate } from './owner'
 import { lastFullGreenRun, runStartMs, verdictsBefore } from './changes'
 import { compareRunIds } from './workspace'
@@ -440,4 +441,30 @@ export function fixChangePrompt(ask: {
     'Find the change that broke each one and fix the agent. If the evidence shows the criterion is wrong rather than the agent, say so instead.',
     `Then re-test with the rook run tool, only=[${ids.map(id => `"${id}"`).join(', ')}].`,
   ].join('\n')
+}
+
+/** A cause shared by verdicts to check, with what to do about it once rather than per scenario. */
+export type CheckGroup = { key: string; title: string; remedy?: string; items: Owned[] }
+
+/**
+ * Verdicts to check, grouped: a profile that broke, each cause the judge could
+ * not check for (the same causes as *What nobody looked at*), then passes with
+ * a reason not to trust them, each keeping its own reason.
+ */
+export function checkGroups(toCheck: readonly Owned[]): CheckGroup[] {
+  const harness = toCheck.filter(o => o.owner === 'harness')
+  const judged = toCheck.filter(o => o.owner === 'judge')
+  const passbut = toCheck.filter(o => o.owner === 'passbut')
+  const byCause = gapGroups(judged.map(o => o.row)).map(group => ({
+    key: `judge-${group.cause}`,
+    title: `judge unsure: ${group.title}`,
+    remedy: group.remedy,
+    items: judged.filter(o => group.rows.some(row => row.id === o.id)),
+  }))
+
+  return [
+    ...(harness.length > 0 ? [{ key: 'harness', title: 'profile broke: the agent was not really tested', remedy: harness[0]!.why, items: harness }] : []),
+    ...byCause,
+    ...(passbut.length > 0 ? [{ key: 'passbut', title: "passed, but don't trust it yet", items: passbut }] : []),
+  ]
 }

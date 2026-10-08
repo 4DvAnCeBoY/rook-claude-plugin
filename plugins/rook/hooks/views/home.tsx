@@ -2,7 +2,7 @@ import type { RookCluster, RookScenarioRow, RookStatus } from '../../types'
 import { clip, excerpt, gapText, isExplained, reasonText } from '../format'
 import { notesOf, plural } from '../health'
 import type { GapCause, GapGroup } from '../health'
-import { brokeLine, costLine, grewLine, releaseLine, STATUS_COLOR, STATUS_ICON } from '../home'
+import { brokeLine, checkGroups, costLine, grewLine, releaseLine, STATUS_COLOR, STATUS_ICON } from '../home'
 import type { ChangedFile, Cost, Owned, Release } from '../home'
 import { OWNER_COLOR, OWNER_LABEL } from '../owner'
 import type { El } from './kit'
@@ -325,8 +325,23 @@ export function ReleaseView(props: ReleaseProps) {
       <Clusters {...props} />
 
       {release.toCheck.length > 0 && <Text bold>Verdicts to check</Text>}
-      {release.toCheck.slice(0, 12).map(o => (
-        <ScenarioRow key={`hc-${o.id}`} el={props.el} prefix="hc" o={o} width={width} withOwner note={o.why} onOpen={props.onOpen} />
+      {checkGroups(release.toCheck).map(group => (
+        <Box key={`hg-${group.key}`} flexDirection="column">
+          <Text color={group.key === 'passbut' ? 'yellow' : group.key === 'harness' ? 'yellow' : 'blue'} wrap="truncate-end">
+            {group.title} ({group.items.length})
+          </Text>
+          {group.remedy !== undefined && (
+            <Box paddingLeft={2}>
+              <Text dimColor wrap="wrap">
+                → {clip(group.remedy, 300)}
+              </Text>
+            </Box>
+          )}
+          {group.items.slice(0, 8).map(o => (
+            <ScenarioRow key={`hc-${o.id}`} el={props.el} prefix="hc" o={o} width={width} {...(group.key === 'passbut' && { note: o.why })} onOpen={props.onOpen} />
+          ))}
+          {group.items.length > 8 && <Text dimColor>  +{group.items.length - 8} more in the Scenarios tab</Text>}
+        </Box>
       ))}
       <Gaps {...props} />
 

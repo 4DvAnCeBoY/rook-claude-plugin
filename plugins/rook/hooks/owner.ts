@@ -29,6 +29,11 @@ export const NEVER_PASSED_RUNS = 3
 
 const FAULTS: Record<string, RookOwner> = { agent: 'agent', scenario: 'scenario', harness: 'harness' }
 
+const REASON_WORDS: Record<string, string> = {
+  not_observable: 'what it needed to see was not in the evidence',
+  undecidable: 'the evidence does not settle it either way',
+}
+
 export const OWNER_LABEL: Record<RookOwner, string> = {
   agent: 'agent bug',
   scenario: 'scenario wrong',
@@ -78,7 +83,8 @@ export function ownerOf(input: OwnerInput): OwnerVerdict {
   }
 
   if (row.status === 'Unable to Verify') {
-    const gap = row.gaps[0] ?? row.unchecked[0]
+    // rook's own gap note says why in words; a criterion's evidence is often a quote, so it comes last.
+    const gap = row.gaps[0] ?? REASON_WORDS[row.reason ?? ''] ?? row.unchecked[0]
 
     return { owner: 'judge', why: `The judge could not check it${gap ? `: ${clipped(gap)}` : ''}.` }
   }

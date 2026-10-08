@@ -3,6 +3,7 @@ import type { Engine } from 'claude-code/testing'
 
 import type { RookCluster, RookRunView, RookScenarioRow, RookStatus, RookVerdictHistory } from '../types'
 import {
+  checkGroups,
   blockersReportPrompt,
   costLine,
   costOf,
@@ -269,8 +270,9 @@ describe('home · Release (QE)', () => {
       expect(await ui.find({ text: '✗✗' })).toBeDefined() // failed in both runs
 
       expect((await ui.find({ key: 'hc-SC-007' }))?.text).toContain('? SC-007')
-      expect(await ui.find({ text: '[judge unsure]' })).toBeDefined()
-      expect(await ui.find({ text: /The judge could not check it: the refund ledger/ })).toBeDefined()
+      // Grouped by cause, with what to do once for the group rather than per scenario.
+      expect(await ui.find({ text: /^judge unsure: .+ \(1\)$/ })).toBeDefined()
+      expect(await ui.find({ text: /^→ / })).toBeDefined()
       expect(await ui.find({ text: 'What nobody looked at' })).toBeDefined()
 
       expect((await ui.find({ key: 'home-gaps' }))?.text).toBe('no scenarios: F-003 Gift cards')
@@ -415,5 +417,26 @@ describe('home · My change (developer)', () => {
     expect(await ui.find({ key: 'home-fix' })).toBeUndefined()
     expect(await ui.find({ key: 'home-retest' })).toBeUndefined()
     expect(await ui.find({ key: 'rerun-failed' })).toBeDefined()
+  })
+})
+
+describe('home · verdicts to check, grouped by cause', () => {
+  const owned = (id: string, owner: 'judge' | 'harness' | 'passbut', note: string) =>
+    ({ id, title: id, runId: 'r', status: owner === 'passbut' ? 'Pass' : 'Unable to Verify', owner, why: note, history: [], isAdversarial: false, row: { id, title: id, status: owner === 'passbut' ? 'Pass' : 'Unable to Verify', gaps: [note], unchecked: [], compromised: false, summary: '', failing: [], runId: 'r' } }) as never
+
+  test('the same cause once with its remedy; a broken profile first; passes keep their own reasons', () => {
+    const groups = checkGroups([
+      owned('SC-001', 'judge', 'CALL-01: rook has no record of what the agent called'),
+      owned('SC-002', 'judge', 'tool-call expectations could not be checked'),
+      owned('SC-003', 'harness', 'The execute hook failed: 500'),
+      owned('SC-004', 'passbut', 'Pass, but a forbidden pattern appeared'),
+    ])
+
+    expect(groups.map(g => [g.key, g.items.map(o => o.id)])).toEqual([
+      ['harness', ['SC-003']],
+      ['judge-tool_calls', ['SC-001', 'SC-002']],
+      ['passbut', ['SC-004']],
+    ])
+    expect(groups[1]!.remedy).toBeDefined()
   })
 })
