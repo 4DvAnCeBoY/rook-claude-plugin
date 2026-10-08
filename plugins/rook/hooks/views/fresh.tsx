@@ -6,13 +6,16 @@ import type { El } from './kit'
 /** The one-line key guide at the foot of a focused pane. The engine does the moving; this only says how. */
 export const KEYS_HINT = '↹/↑↓ move · Enter press · 1-5 tabs · l view · Esc back to the prompt'
 
-export function KeysHint(props: { el: El }) {
+/** The setup checklist alone has no tabs and no view switch. */
+export const SETUP_KEYS_HINT = '↹/↑↓ move · Enter press · Esc back to the prompt'
+
+export function KeysHint(props: { el: El; isSetupOnly?: boolean }) {
   const { Box, Text } = props.el
 
   return (
     <Box key="keys-hint">
       <Text dimColor wrap="truncate-end">
-        {KEYS_HINT}
+        {props.isSetupOnly === true ? SETUP_KEYS_HINT : KEYS_HINT}
       </Text>
     </Box>
   )

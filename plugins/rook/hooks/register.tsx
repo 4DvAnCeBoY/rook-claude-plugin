@@ -1335,15 +1335,25 @@ async function retest($: EngineInterface): Promise<void> {
 }
 
 /** `/rook generate`: in the background, its failure kept in the pane as well as toasted. */
+/** `rook generate: 0 scenario files written`: rook ran and wrote nothing. */
+const wroteNothing = (text: string): boolean => /^rook generate: 0 scenario files? written/.test(text)
+
+/** What to do when generate wrote nothing because explore found no features to write against. */
+const nothingHint = (text: string): string =>
+  wroteNothing(text) && /no features/.test(text)
+    ? '\nExplore found no features in this agent, so there is nothing to write scenarios against. Explore again and say what the agent does: /rook explore --force -- <what it does, its tools and users>.'
+    : ''
+
 async function backgroundGenerate($: EngineInterface, ctx: Ctx, request: GenerateRequest): Promise<void> {
   await update($, lastErrorAtom, () => null)
   const text = await generateRun($, ctx, request, undefined, 'background').catch(error => `rook generate failed: ${String(error)}`)
 
   // What was written always opens "rook generate: N scenario files written"; anything else failed.
-  if (!text.startsWith('rook generate:')) {
+  // Nothing written is a failure too: a toast alone leaves the setup step unexplained.
+  if (!text.startsWith('rook generate:') || wroteNothing(text)) {
     const at = await $.clock.now()
 
-    await update($, lastErrorAtom, () => ({ source: 'generate', text: text.replace(/^rook(?::\s*|\s+)/, ''), at }))
+    await update($, lastErrorAtom, () => ({ source: 'generate', text: text.replace(/^rook(?::\s*|\s+)/, '') + nothingHint(text), at }))
   }
 
   $.ui.toast(toastText(clip(text, 300)))
@@ -4317,7 +4327,7 @@ export const register: Register = (on, options) => {
           {failedBefore}
           {jobView}
           {confirmView}
-          {e.props.isFocused && <KeysHint el={el} />}
+          {e.props.isFocused && <KeysHint el={el} isSetupOnly />}
         </Box>
       )
     }
@@ -4619,7 +4629,8 @@ export const register: Register = (on, options) => {
             )}
           </Box>
         )}
-        {runBlock !== undefined && (
+        {/* The first-run lead already says what is missing and offers the button. */}
+        {runBlock !== undefined && lead === null && (
           <Box key="run-block">
             <Text color="yellow" wrap="wrap">
               ⚠ {runBlock}
