@@ -34,6 +34,8 @@ import { ScenariosTab } from './views/scenarios'
 // ── end imports: card
 
 // ── imports: ci
+import { parseCiArgs, previewText, WORKFLOW_PATH, workflowYaml, writtenText } from './ci'
+import type { CiPlan, CiRequest } from './ci'
 // ── end imports: ci
 import {
   agentsText,
@@ -205,6 +207,7 @@ const CURATE_TOOL = /^mcp__rook__curate$/
 // ── tool patterns: setup tab
 // ── end tool patterns: setup tab
 // ── tool patterns: ci
+const CI_TOOL = /^mcp__rook__ci$/
 // ── end tool patterns: ci
 /** Every tool that writes a file; MultiEdit exists on some builds only. */
 const EDIT_TOOLS = /^(Edit|Write|MultiEdit|NotebookEdit)$/
@@ -1747,11 +1750,63 @@ async function syncReply($: EngineInterface, ctx: Ctx): Promise<string> {
 
 /** `/rook ci`: write a CI workflow that runs rook on pull requests. */
 async function ciReply($: EngineInterface, ctx: Ctx, args: string[]): Promise<string> {
-  void $
-  void ctx
-  void args
+  const request = parseCiArgs(args)
 
-  return 'rook: ci is not built yet.'
+  return 'error' in request ? `rook: ${request.error}` : ciAnswer($, ctx, request)
+}
+
+/** What the workflow needs from this workspace: the active profile's variable names, the installed build. Never a value. */
+async function ciPlan($: EngineInterface, ctx: Ctx, request: CiRequest): Promise<CiPlan | undefined> {
+  const loc = ctx.located ?? (await where($, ctx))
+
+  if (loc === undefined) {
+    return undefined
+  }
+
+  const target = await profileOf($, ctx)
+  const profileText = target === undefined ? undefined : await ioOf($, ctx).read(`${loc.agentDir}/profiles/${target.profileId}.yaml`)
+  // `rook --version` prints the build's commit; readiness keeps only a semver, so ask again.
+  const version = await $.process
+    .run([ctx.bin, '--version'], { env: CLI_ENV, stdin: '', timeoutMs: 10_000 })
+    .then(ran => (ran.exitCode === 0 ? /\b[0-9a-f]{7,40}\b/.exec(ran.stdout)?.[0] : undefined))
+    .catch(() => undefined)
+
+  return {
+    ...(target !== undefined && profileText !== undefined && { profileId: target.profileId }),
+    variables: profileText === undefined ? [] : declaredVariables(profileText),
+    ...(version !== undefined && { version }),
+    allowRules: ctx.approval.allowRules,
+    failOnUnverifiable: request.failOnUnverifiable,
+  }
+}
+
+/** Preview, or write the workflow when asked and nothing is there (or `force`). Shared by /rook ci and the ci tool. */
+async function ciAnswer($: EngineInterface, ctx: Ctx, request: CiRequest): Promise<string> {
+  const plan = await ciPlan($, ctx, request)
+
+  if (plan === undefined) {
+    return 'rook: no rook workspace here. /rook ci writes a workflow for the agent set up in this directory (/rook explore sets one up).'
+  }
+
+  const yaml = workflowYaml(plan)
+  const path = ctx.cwd === '' ? WORKFLOW_PATH : `${ctx.cwd.replace(/\/$/, '')}/${WORKFLOW_PATH}`
+  const exists = await $.fs.exists(path).catch(() => false)
+
+  if (!request.write) {
+    return previewText(plan, yaml, exists)
+  }
+
+  if (exists && !request.force) {
+    return `rook: ${WORKFLOW_PATH} exists already and was left as it is. /rook ci shows what would replace it; /rook ci write --force replaces it.`
+  }
+
+  try {
+    await $.fs.write(path, yaml)
+  } catch (error) {
+    return `rook: could not write ${WORKFLOW_PATH}: ${clip(String(error), 200)}`
+  }
+
+  return writtenText(plan)
 }
 
 // ══ end feature: ci ══════════════════════════════════════════════════════════
@@ -1992,6 +2047,24 @@ export const register: Register = (on, options) => {
     // ── end tool registrations: setup tab
 
     // ── tool registrations: ci
+    await $.tool.register({
+      name: 'ci',
+      description:
+        `Make rook a pull-request check: a GitHub Actions workflow (${WORKFLOW_PATH}) that installs rook, signs in from repository secrets, ` +
+        "runs the agent's functional scenarios (or the ROOK_ONLY ids) with rook run --test --json, uploads the run folder, and fails on Fail verdicts " +
+        '(Unable to Verify too when fail_on_unverifiable). Without write it previews: the path, the secret names the person must add, and the YAML. ' +
+        'With write it writes the file, unless one exists (force replaces it). No credits, no agent call. Secret values never go in the file: ' +
+        'tell the person which secrets to add; do not ask them for the values.',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          write: { type: 'boolean', description: 'Write the workflow file; default false (preview only)' },
+          force: { type: 'boolean', description: 'With write: replace an existing workflow file' },
+          fail_on_unverifiable: { type: 'boolean', description: 'Fail the check on Unable to Verify as well as on Fail' },
+        },
+      },
+    })
     // ── end tool registrations: ci
 
     await poll($, ctx)
@@ -2127,6 +2200,11 @@ export const register: Register = (on, options) => {
   // ── end tool handlers: setup tab
 
   // ── tool handlers: ci
+  on('tool.call', { tool: CI_TOOL }, async ($, e) => {
+    const { write, force, fail_on_unverifiable: strict } = e as unknown as { write?: unknown; force?: unknown; fail_on_unverifiable?: unknown }
+
+    return { result: await ciAnswer($, ctx, { write: write === true, force: force === true, failOnUnverifiable: strict === true }) }
+  })
   // ── end tool handlers: ci
 
   // 7 · production guard over the model's shell
