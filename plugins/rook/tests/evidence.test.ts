@@ -212,3 +212,14 @@ describe('one rule for every view · flaky and the green baseline', () => {
     expect(lastFullGreenRun([{ id: 'SC-001', runs: [{ runId: full, status: 'Fail' as const }] }])).toBeUndefined()
   })
 })
+
+describe('owner · a failed hook after the agent replied', () => {
+  test('a failed collect is missing evidence, not an untested agent', () => {
+    const fail = rowOf('SC-017', SC017_VERDICT, '')!
+    const phases = phasesOf(SC017_HOOKS).map(p => (p.name === 'collect' ? { ...p, ok: false, error: 'structuredClone is not defined' } : p))
+    const verdict = ownerOf({ row: fail, phases, hasReply: true })
+
+    expect(verdict.owner).toBe('agent')
+    expect(verdict.why).toContain('The collect hook failed (structuredClone is not defined), so some evidence may be missing.')
+  })
+})

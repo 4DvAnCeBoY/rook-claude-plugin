@@ -29,6 +29,9 @@ export const NEVER_PASSED_RUNS = 3
 
 const FAULTS: Record<string, RookOwner> = { agent: 'agent', scenario: 'scenario', harness: 'harness' }
 
+/** Hooks that run before or during the agent's turn: if one fails, the agent was not really tested. */
+const REACHES_AGENT = new Set(['prepare', 'open', 'execute'])
+
 const REASON_WORDS: Record<string, string> = {
   not_observable: 'what it needed to see was not in the evidence',
   undecidable: 'the evidence does not settle it either way',
@@ -55,7 +58,11 @@ export const OWNER_COLOR: Record<RookOwner, string> = {
 
 export function ownerOf(input: OwnerInput): OwnerVerdict {
   const { row } = input
-  const broken = input.phases?.find(p => p.ran && !p.ok)
+  const failed = input.phases?.find(p => p.ran && !p.ok)
+  // Only a hook before or during the agent's turn means it was not tested; a
+  // failed close or collect means some evidence is missing, said beside the verdict.
+  const broken = failed !== undefined && REACHES_AGENT.has(failed.name) ? failed : undefined
+  const missing = failed !== undefined && broken === undefined ? ` The ${failed.name} hook failed${failed.error ? ` (${clipped(failed.error)})` : ''}, so some evidence may be missing.` : ''
 
   if (row.status === 'Pass') {
     const reasons = [
@@ -86,22 +93,22 @@ export function ownerOf(input: OwnerInput): OwnerVerdict {
     // rook's own gap note says why in words; a criterion's evidence is often a quote, so it comes last.
     const gap = row.gaps[0] ?? REASON_WORDS[row.reason ?? ''] ?? row.unchecked[0]
 
-    return { owner: 'judge', why: `The judge could not check it${gap ? `: ${clipped(gap)}` : ''}.` }
+    return { owner: 'judge', why: `The judge could not check it${gap ? `: ${clipped(gap)}` : ''}.${missing}` }
   }
 
   const before = input.before ?? []
 
   if (before.length >= NEVER_PASSED_RUNS && !before.includes('Pass')) {
-    return { owner: 'scenario', why: `It has never passed in ${before.length + 1} runs. The scenario may ask for something this agent or environment cannot do.` }
+    return { owner: 'scenario', why: `It has never passed in ${before.length + 1} runs. The scenario may ask for something this agent or environment cannot do.${missing}` }
   }
 
   if (row.compromised) {
-    return { owner: 'agent', why: 'rook marked the run compromised: the agent was manipulated.' }
+    return { owner: 'agent', why: `rook marked the run compromised: the agent was manipulated.${missing}` }
   }
 
   const regressed = before.at(-1) === 'Pass' ? ' It passed the run before.' : ''
 
-  return { owner: 'agent', why: `The agent replied and the judge failed ${row.failing.map(f => f.id).join(', ') || 'it'}.${regressed}` }
+  return { owner: 'agent', why: `The agent replied and the judge failed ${row.failing.map(f => f.id).join(', ') || 'it'}.${regressed}${missing}` }
 }
 
 /** A Pass nothing undermines: no forbidden hit, no weak criterion, full compliance. */
