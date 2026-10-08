@@ -72,6 +72,13 @@ import type { RookLens } from '../types'
 // ── end imports: shared lens and drill-down
 
 // ── imports: drill-down
+import { ScenarioDrillDown } from './views/detail'
+import { detailModel } from './detail'
+import type { DetailActionId, DetailModel } from './detail'
+import { bugReportPrompt, fixAgentPrompt, fixProfilePrompt, fixScenarioPrompt } from './prompts'
+import type { PromptAbout } from './prompts'
+import type { RookEvidence } from '../types'
+import type { ScenarioInfo as DrillScenarioInfo } from './scenarios'
 // ── end imports: drill-down
 
 // ── imports: home
@@ -2384,6 +2391,23 @@ async function scenarioVerdict($: EngineInterface, ctx: Ctx, id: string, runId: 
   return row === undefined ? { verdictPath } : { row, verdictPath }
 }
 
+/**
+ * A row opens the scenario drill-down on its newest verdict. One never run
+ * has no evidence yet: it still unfolds to its file's goal and criteria.
+ */
+async function scenarioOpen($: EngineInterface, ctx: Ctx, id: string): Promise<void> {
+  const current = (await read($, snapshotAtom))?.current.find(row => row.id === id)
+
+  if (current === undefined) {
+    await update($, scenarioDetailAtom, was => (was === id ? null : id))
+
+    return
+  }
+
+  await update($, scenarioDetailAtom, () => null)
+  await openDetail($, ctx, current.runId, id)
+}
+
 async function scenarioRunSelected($: EngineInterface): Promise<void> {
   const selected = await read($, selectedAtom)
 
@@ -2994,6 +3018,118 @@ async function ciAnswer($: EngineInterface, ctx: Ctx, request: CiRequest): Promi
 // ══ end feature: ci ══════════════════════════════════════════════════════════
 
 // ══ feature: drill-down (scenario evidence, owner actions, prompts) ══════════
+
+/** What the drill-down shows and its actions act on, from state already read. Reads only: the render hook calls it too. */
+type DrillState = {
+  model: DetailModel
+  info?: DrillScenarioInfo
+  about: PromptAbout
+  /** The same scenario's verdict in the run before, for the cost comparison. */
+  rowBefore?: { runId: string; row: RookScenarioRow }
+}
+
+async function drillState($: EngineInterface, ctx: Ctx, detail: { runId: string; id: string }, evidence: RookEvidence | null, canRun: boolean): Promise<DrillState> {
+  const { id, runId } = detail
+  const snapshot = await read($, snapshotAtom)
+  const verdicts = await read($, verdictsAtom)
+  const prior = (await read($, flakyPriorAtom))[id]
+  const checked = (await read($, flakyAtom))[id] ?? []
+  const { row } = await scenarioVerdict($, ctx, id, runId)
+  const info = (await scenarioList($, ctx)).find(s => s.id === id)
+  const latest = snapshot?.latest
+  const model = detailModel({
+    id,
+    runId,
+    lens: await read($, lensAtom),
+    evidence,
+    row,
+    verdicts,
+    clusters: latest?.runId === runId ? latest.clusters : [],
+    stamps: sourceStampsNow(ctx),
+    checked: checked.length === 0 || prior === undefined ? checked : [prior, ...checked],
+    canRun,
+  })
+  // The history ends at this run when it holds it; otherwise this run is newer than anything it holds.
+  const previous = model.history.at(model.history.at(-1)?.runId === runId ? -2 : -1)?.runId
+  const before = previous === undefined ? undefined : (await scenarioVerdict($, ctx, id, previous)).row
+  const agentDir = ctx.located?.agentDir
+  const profileId = snapshot?.profileId
+
+  return {
+    model,
+    ...(info !== undefined && { info }),
+    ...(previous !== undefined && before !== undefined && { rowBefore: { runId: previous, row: before } }),
+    about: {
+      ...(snapshot?.agentId !== undefined && { agentId: snapshot.agentId }),
+      ...(profileId !== undefined && { profileId }),
+      ...(info?.class !== undefined && { cls: info.class }),
+      ...(row?.compromised === true && { compromised: true }),
+      ...(agentDir !== undefined && { scenarioPath: `${agentDir}/scenarios/${id}.yaml` }),
+      ...(agentDir !== undefined && profileId !== undefined && { profilePath: `${agentDir}/profiles/${profileId}.yaml` }),
+    },
+  }
+}
+
+/** One of the drill-down's actions: a prompt to Claude, or a credit-spending one parked in the confirm bar. */
+async function drillAction($: EngineInterface, ctx: Ctx, action: DetailActionId): Promise<void> {
+  const detail = await read($, detailAtom)
+  const evidence = await read($, evidenceAtom)
+
+  if (detail === null) {
+    return
+  }
+
+  const { id } = detail
+
+  if (action === 'rerun3') {
+    await scenarioAskFlaky($, id)
+
+    return
+  }
+
+  if (action === 'retest') {
+    const rate = creditsPerScenario((await read($, snapshotAtom))?.latest)
+
+    await askConfirm($, { action: 'run', only: [id], label: `Re-test ${id}`, ...(rate !== undefined && { credits: rate }) })
+
+    return
+  }
+
+  if (action === 'regression') {
+    await scenarioRegression($, ctx, id)
+
+    return
+  }
+
+  const state = await drillState($, ctx, detail, evidence, true)
+
+  if (action === 'testProfile') {
+    const profile = state.about.profileId
+
+    await askConfirm($, { action: 'profile-test', ...(profile !== undefined && { profile }), label: `Test profile ${profile ?? '(active)'}: one call to your agent` })
+
+    return
+  }
+
+  const owner = state.model.owner
+
+  if (evidence === null || owner === undefined) {
+    return
+  }
+
+  const { changed } = state.model
+  const text =
+    action === 'bug'
+      ? bugReportPrompt(evidence, owner, changed, state.about)
+      : action === 'fixAgent'
+        ? fixAgentPrompt(evidence, owner, changed, state.about)
+        : action === 'fixProfile'
+          ? fixProfilePrompt(evidence, owner, state.about)
+          : fixScenarioPrompt(evidence, owner, state.about, action === 'sharpen' ? 'sharpen' : action === 'tighten' ? 'tighten' : 'fix')
+
+  await $.prompt.submit({ text })
+}
+
 // ══ end feature: drill-down ══════════════════════════════════════════════════
 
 // ══ feature: home (Release for QE, My change for dev) ════════════════════════
@@ -3588,15 +3724,39 @@ export const register: Register = (on, options) => {
     // The scenario drill-down replaces any tab's body while open; Back closes it.
     if (detail !== null) {
       const evidence = await read($, evidenceAtom)
+      const canRun = running === null && blockedText(readiness, NEEDS.run, 'run') === undefined
+      const drill = await drillState($, ctx, detail, evidence, canRun)
+      const { model } = drill
+      const before = drill.rowBefore
 
       return frame(
-        <Box flexDirection="column">
-          <Text bold>
-            {detail.id} <Text dimColor>· run {detail.runId}</Text>
-          </Text>
-          {evidence === null ? <Text dimColor>reading its evidence…</Text> : <Text wrap="wrap">{evidence.summary}</Text>}
-          <Button key="detail-back" label="Back" hotkey="b" role="dismiss" onPress={() => closeDetail($)} />
-        </Box>,
+        <ScenarioDrillDown
+          el={el}
+          id={detail.id}
+          runId={detail.runId}
+          evidence={evidence}
+          {...(drill.info?.title !== undefined && { title: drill.info.title })}
+          {...(model.owner !== undefined && { owner: model.owner })}
+          sections={model.sections}
+          history={model.history}
+          isRegressed={model.isRegressed}
+          isFlaky={model.isFlaky}
+          tags={[drill.info?.class, drill.info?.category, evidence?.featureId ?? drill.info?.featureId].filter((t): t is string => t !== undefined)}
+          changed={model.changed}
+          {...(before !== undefined && {
+            costBefore: {
+              runId: before.runId,
+              ...(before.row.turns !== undefined && { turns: before.row.turns }),
+              ...(before.row.tokens !== undefined && { tokens: before.row.tokens }),
+              ...(before.row.latencyMs !== undefined && { latencyMs: before.row.latencyMs }),
+            },
+          })}
+          actions={model.actions}
+          now={now}
+          width={width}
+          onAction={action => drillAction($, ctx, action)}
+          onBack={() => closeDetail($)}
+        />,
       )
     }
     // ── end pane seam: drill-down
@@ -3664,7 +3824,7 @@ export const register: Register = (on, options) => {
           width={width}
           onFilter={next => update($, filterAtom, () => (isFilter(next) ? next : 'all'))}
           onToggle={id => update($, selectedAtom, ids => toggled(ids, id))}
-          onOpen={id => update($, scenarioDetailAtom, was => (was === id ? null : id))}
+          onOpen={id => scenarioOpen($, ctx, id)}
           onSelectAll={() => update($, selectedAtom, ids => withAll(ids, shown.map(view => view.id)))}
           onClear={() => update($, selectedAtom, () => [])}
           onRunSelected={() => scenarioRunSelected($)}
