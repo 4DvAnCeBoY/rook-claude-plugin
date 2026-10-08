@@ -263,27 +263,49 @@ export function runSummary(run: RookRunView, agentDir: string, agentId: string, 
 const spentLine = (total: number | undefined): string =>
   total === undefined ? '' : `\nSpent in total: ${credits(total)} (the run plus rook's report).`
 
-export function staleLine(stale: RookStale): string {
+/** The band's scenarios the person left ticked (all, until they untick some). */
+export const tickedOf = (stale: RookStale, unticked: readonly string[] = []): RookStale['scenarios'] =>
+  stale.scenarios.filter(s => !unticked.includes(s.id))
+
+/** One scenario's estimated re-test cost, from the band's estimate for all of them. */
+export const perScenario = (stale: RookStale): number | undefined =>
+  stale.estimate === undefined || stale.scenarios.length === 0 ? undefined : stale.estimate / stale.scenarios.length
+
+/** The band's line: what changed, what it reaches and why, what re-testing the ticked scenarios costs. */
+export function staleLine(stale: RookStale, unticked: readonly string[] = []): string {
   const [first, ...rest] = stale.files
   const files = `${first ?? ''}${rest.length > 0 ? ` (+${rest.length})` : ''}`
-  const reach = stale.isWholeAgent ? `all ${plural(stale.scenarios.length, 'scenario')} may be affected` : `${plural(stale.scenarios.length, 'scenario')} touch it`
-  const cost = stale.estimate === undefined ? '' : ` · ~${credits(stale.estimate)}`
+  const reach =
+    stale.reason ?? (stale.isWholeAgent ? `all ${plural(stale.scenarios.length, 'scenario')} may be affected` : `${plural(stale.scenarios.length, 'scenario')} touch it`)
+  const ticked = tickedOf(stale, unticked).length
+  const picked = ticked === stale.scenarios.length ? '' : ` · ${ticked} of ${stale.scenarios.length} ticked`
+  const each = perScenario(stale)
+  const cost = each === undefined ? '' : ` · ~${credits(each * ticked)}`
 
-  return `Agent changed since last run: ${files} · ${reach}${cost}`
+  return `Agent changed since last run: ${files} · ${reach}${picked}${cost}`
 }
 
-export function retestPrompt(stale: RookStale): string {
+/** What Re-test asks Claude: only the ticked scenarios, and how they were chosen. */
+export function retestPrompt(stale: RookStale, unticked: readonly string[] = []): string {
   const ids = stale.scenarios.map(s => s.id)
-  const scope = stale.isWholeAgent || ids.length === 0 ? 'every scenario' : `scenarios ${ids.join(', ')}`
-  const cost = stale.estimate === undefined ? '' : ` That is about ${credits(stale.estimate)} at the last run's rate.`
+  const ticked = tickedOf(stale, unticked)
+  const isEverything = ids.length === 0 || (stale.isWholeAgent && ticked.length === ids.length)
+  const scope = isEverything ? 'every scenario' : `scenarios ${ticked.map(s => s.id).join(', ')}`
+  const each = perScenario(stale)
+  const cost = each === undefined ? '' : ` That is about ${credits(each * (isEverything ? ids.length : ticked.length))} at the last run's rate.`
   const narrow =
-    stale.isWholeAgent && ids.length > 1
-      ? ' No feature cites the changed file, so every scenario may be affected; if you can tell from the change which scenarios it reaches, run only those.'
+    isEverything && stale.isWholeAgent && ids.length > 1
+      ? ` No feature cites the changed file, so every scenario may be affected${stale.reason === undefined ? '' : ` (${stale.reason})`}; if you can tell from the change which scenarios it reaches, run only those.`
       : ''
+  const chosen =
+    !isEverything && stale.reason !== undefined
+      ? ` No feature cites the changed file, so these were chosen as ${stale.reason}: ${ticked.map(s => `${s.id}${s.why === undefined ? '' : ` (${s.why})`}`).join(', ')}. If the change plainly reaches other scenarios, say which.`
+      : ''
+  const left = ticked.length < ids.length ? ` The person left out ${ids.filter(id => unticked.includes(id)).join(', ')}; do not run those.` : ''
 
   return (
     `The agent under test changed (${stale.files.join(', ')}). Use the rook run tool to re-test ${scope}` +
-    `${stale.isWholeAgent || ids.length === 0 ? '' : ' (pass them as `only`)'}, then fix anything that fails, quoting rook's evidence.${cost}${narrow}`
+    `${isEverything ? '' : ' (pass them as `only`)'}, then fix anything that fails, quoting rook's evidence.${cost}${narrow}${chosen}${left}`
   )
 }
 

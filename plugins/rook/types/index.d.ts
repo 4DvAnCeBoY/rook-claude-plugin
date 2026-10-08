@@ -119,9 +119,12 @@ export type RookSnapshot = {
 
 export type RookStale = {
   files: string[]
-  scenarios: { id: string; title: string }[]
+  /** `why`: how the edit reaches it (a feature cites the file, an import, a tool name it shares). */
+  scenarios: { id: string; title: string; why?: string }[]
   /** True when no feature names the file: every scenario of the agent may be affected. */
   isWholeAgent: boolean
+  /** How the set was chosen when no feature cites the file (`shared code: matched 3 scenarios by tool names …`). */
+  reason?: string
   /** What re-testing them would cost at the latest run's credits per scenario. */
   estimate?: number
   since: number
@@ -222,7 +225,10 @@ declare module 'claude-code' {
       // ── end feature: setup tab
 
       // ── feature: band (precise re-test)
+      /** Scenario ids the person unticked in the re-test band: left out of Re-test. */
       unticked: string[]
+      /** The band's Details list is open. */
+      isBandOpen: boolean
       // ── end feature: band
 
       // ── feature: status line

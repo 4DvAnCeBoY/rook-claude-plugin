@@ -25,6 +25,10 @@ import { ScenariosTab } from './views/scenarios'
 // ── end imports: setup tab
 
 // ── imports: band
+import { mergeReach, reach } from './impact'
+import type { Reach } from './impact'
+import { tickedOf } from './format'
+import { RetestBand } from './views/band'
 // ── end imports: band
 
 // ── imports: status line
@@ -176,6 +180,7 @@ const budgetAtom = atom({ plugin: 'rook', key: 'budget' } as const, null)
 
 // ── atoms: band
 const untickedAtom = atom({ plugin: 'rook', key: 'unticked' } as const, [])
+const bandOpenAtom = atom({ plugin: 'rook', key: 'isBandOpen' } as const, false)
 // ── end atoms: band
 
 // ── atoms: status line
@@ -995,21 +1000,37 @@ async function noted($: EngineInterface, ctx: Ctx, path: string): Promise<void> 
     return
   }
 
-  const index = ctx.agentIndex ?? (await indexAgent(ioOf($, ctx), loc.agentDir))
+  const io = ioOf($, ctx)
+  const index = ctx.agentIndex ?? (await indexAgent(io, loc.agentDir))
   ctx.agentIndex = index
   const stale = await read($, staleAtom)
-  const files = [...new Set([...(stale?.files ?? []), rel])].filter(file => impactOf(index, [file]) !== undefined)
-  const impact = impactOf(index, files)
+  const files = [...new Set([...(stale?.files ?? []), rel])]
+  // Each file is read again: what it defines may have changed with this edit.
+  const reaches = (await Promise.all(files.map(file => reach(index, file, path => io.read(path))))).filter((r): r is Reach => r !== undefined)
 
-  if (impact === undefined) {
+  if (reaches.length === 0) {
     return
   }
 
+  const impact = mergeReach(index, reaches)
   const since = await $.clock.now()
   const rate = creditsPerScenario((await read($, snapshotAtom))?.latest)
   const estimate = rate === undefined ? undefined : rate * impact.scenarios.length
 
-  await update($, staleAtom, () => ({ files, scenarios: impact.scenarios, isWholeAgent: impact.isWholeAgent, ...(estimate !== undefined && { estimate }), since }))
+  await update($, staleAtom, () => ({
+    files: impact.files,
+    scenarios: impact.scenarios,
+    isWholeAgent: impact.isWholeAgent,
+    ...(impact.reason !== undefined && { reason: impact.reason }),
+    ...(estimate !== undefined && { estimate }),
+    since,
+  }))
+
+  if (stale === null) {
+    await update($, untickedAtom, () => []) // a new band starts with every scenario ticked
+    await update($, bandOpenAtom, () => false)
+  }
+
   await update($, bandHiddenAtom, () => false)
 }
 
@@ -1042,13 +1063,21 @@ async function fixOne($: EngineInterface, ctx: Ctx, run: RookRunView, id: string
   }
 }
 
+/** The band's Re-test: only the ticked scenarios. */
 async function retest($: EngineInterface): Promise<void> {
   const stale = await read($, staleAtom)
+  const unticked = await read($, untickedAtom)
+
+  if (stale !== null && stale.scenarios.length > 0 && tickedOf(stale, unticked).length === 0) {
+    $.ui.toast('rook: tick at least one scenario to re-test')
+
+    return
+  }
 
   await update($, bandHiddenAtom, () => true)
 
   if (stale !== null) {
-    await $.prompt.submit({ text: retestPrompt(stale) })
+    await $.prompt.submit({ text: retestPrompt(stale, unticked) })
   }
 }
 
@@ -1735,6 +1764,17 @@ async function syncReply($: EngineInterface, ctx: Ctx): Promise<string> {
 // ══ end feature: setup tab ═══════════════════════════════════════════════════
 
 // ══ feature: band (precise re-test) ══════════════════════════════════════════
+
+/** A band toggle: untick a scenario to leave it out of Re-test, tick it to bring it back. */
+async function toggleTicked($: EngineInterface, id: string): Promise<void> {
+  await update($, untickedAtom, ids => (ids.includes(id) ? ids.filter(other => other !== id) : [...ids, id]))
+}
+
+/** The band's Details: the affected scenarios, each with why it was picked. */
+async function toggleBandOpen($: EngineInterface): Promise<void> {
+  await update($, bandOpenAtom, isOpen => !isOpen)
+}
+
 // ══ end feature: band ════════════════════════════════════════════════════════
 
 // ══ feature: status line ═════════════════════════════════════════════════════
@@ -2522,15 +2562,21 @@ export const register: Register = (on, options) => {
       return next(e)
     }
 
-    const { Box, Text, Button } = $.ui.resolve(e)
+    const unticked = await read($, untickedAtom)
+    const isOpen = await read($, bandOpenAtom)
 
     return (
-      <Box flexDirection="row" gap={1}>
-        <Text color="yellow">◆ rook</Text>
-        <Text wrap="truncate-end">{staleLine(stale)}</Text>
-        <Button key="retest" label="Re-test" variant="primary" onPress={() => retest($)} />
-        <Button key="dismiss" label="Dismiss" role="dismiss" onPress={() => update($, bandHiddenAtom, () => true)} />
-      </Box>
+      <RetestBand
+        el={$.ui.resolve(e)}
+        stale={stale}
+        unticked={unticked.filter(id => stale.scenarios.some(s => s.id === id))}
+        isOpen={isOpen}
+        columns={e.props.bodyColumns}
+        onToggle={id => toggleTicked($, id)}
+        onRetest={() => retest($)}
+        onDetails={() => toggleBandOpen($)}
+        onDismiss={() => update($, bandHiddenAtom, () => true)}
+      />
     )
   })
 }
