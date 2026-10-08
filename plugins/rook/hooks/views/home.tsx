@@ -397,11 +397,13 @@ export function ChangeView(props: ChangeProps) {
         </Text>
       </Box>
 
-      <Text bold>Your change</Text>
+      <Text bold>
+        Your change <Text dimColor>· {props.lastGreen !== undefined ? 'since the last green run' : 'this session'}</Text>
+      </Text>
       {changed.length === 0 && (
         <Box key="home-unchanged">
           <Text dimColor>
-            {props.lastGreen !== undefined ? 'No tracked file edited since the last green run.' : 'No tracked file edits seen yet.'}
+            {props.lastGreen !== undefined ? 'No tracked file edited since the last green run.' : 'No tracked file edited this session.'}
           </Text>
         </Box>
       )}

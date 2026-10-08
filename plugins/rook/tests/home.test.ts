@@ -413,7 +413,7 @@ describe('home · My change (developer)', () => {
     const ui = await mountPane($)
 
     expect((await ui.find({ key: 'home-verdict' }))?.text).toBe('✓ No regressions from your change')
-    expect((await ui.find({ key: 'home-unchanged' }))?.text).toBe('No tracked file edits seen yet.')
+    expect((await ui.find({ key: 'home-unchanged' }))?.text).toBe('No tracked file edited this session.')
     expect(await ui.find({ key: 'home-fix' })).toBeUndefined()
     expect(await ui.find({ key: 'home-retest' })).toBeUndefined()
     expect(await ui.find({ key: 'rerun-failed' })).toBeDefined()

@@ -385,6 +385,8 @@ type Ctx = {
   lensDefault: RookLens
   /** The runs the verdict history was last read from, to skip re-reading when nothing changed. */
   verdictSignature?: string
+  /** When this session started: the change's baseline when no run was green. */
+  sessionStartedAt?: number
   /** Minutes since the snapshot last changed, as the pane header last drew them. */
   freshMinute?: number
   /** Verdict statuses by file path, for the history: a verdict is written once. */
@@ -3305,7 +3307,9 @@ async function homeChanged($: EngineInterface, ctx: Ctx, lastGreen: string | und
   }
 
   const stale = await read($, staleAtom)
-  const edits = new Map(changedSince(sourceStampsNow(ctx), lastGreen === undefined ? undefined : runStartMs(lastGreen)).map(f => [f.path, f.mtimeMs]))
+  // With no green run to measure from, the change is what was edited since this session started.
+  const since = lastGreen === undefined ? ctx.sessionStartedAt : runStartMs(lastGreen)
+  const edits = new Map(changedSince(sourceStampsNow(ctx), since).map(f => [f.path, f.mtimeMs]))
 
   for (const file of stale?.files ?? []) {
     if (!edits.has(file)) {
@@ -4059,6 +4063,7 @@ export const register: Register = (on, options) => {
     })
 
     await loadLens($, ctx)
+    ctx.sessionStartedAt = await $.clock.now()
 
     if (ctx.paneMode === 'auto' && ctx.located !== undefined) {
       void openPane($)
