@@ -11,6 +11,8 @@ import { JobLanes } from './views/job'
 // ── end imports: progress
 
 // ── imports: health
+import { estimateOf, gapGroups, notesOf, plural, unverifiedPrompt, untilAborted } from './health'
+import type { GapCause } from './health'
 // ── end imports: health
 
 // ── imports: runs tab
@@ -256,6 +258,8 @@ type Ctx = {
   rows: RowCache
   /** Installed and signed in, as the CLI last said: probed at start and when they block, not every poll. */
   cli: CliFacts
+  /** Ends the background run the person started (pane, /rook run), for its Cancel. */
+  runAbort?: AbortController
 }
 
 function textOption(value: unknown, fallback: string): string {
@@ -310,7 +314,13 @@ async function rookRun($: EngineInterface, ctx: Ctx, argv: string[], signal?: Ab
       return { exitCode: 130, doc: undefined, stderr: `${stderr}\ninterrupted` }
     }
 
-    const step = await iterator.next()
+    const step = await untilAborted(iterator.next(), signal)
+
+    if (step === undefined) {
+      void iterator.return?.(undefined as never)?.catch(() => undefined)
+
+      return { exitCode: 130, doc: undefined, stderr: `${stderr}\ninterrupted` }
+    }
 
     if (step.done) {
       const ended = step.value as { code: number | null } | undefined
@@ -629,12 +639,14 @@ async function prodBlock($: EngineInterface, ctx: Ctx, profileRef?: string): Pro
 
 // ── running ──────────────────────────────────────────────────────────────────
 
-async function backgroundRun($: EngineInterface, ctx: Ctx, argv: string[]): Promise<void> {
+async function backgroundRun($: EngineInterface, ctx: Ctx, argv: string[], signal?: AbortSignal): Promise<void> {
   try {
-    const result = await rookRun($, ctx, argv)
+    const result = await rookRun($, ctx, argv, signal)
     const problem = failureOf(result)
 
-    if (problem !== undefined) {
+    if (signal?.aborted) {
+      $.ui.toast('rook: run cancelled')
+    } else if (problem !== undefined) {
       // A toast vanishes; the pane keeps the failure until the next run starts.
       const text = await explained($, ctx, result, `run failed: ${problem}`, NEEDS.run, 'run')
 
@@ -651,6 +663,10 @@ async function backgroundRun($: EngineInterface, ctx: Ctx, argv: string[]): Prom
     await update($, lastErrorAtom, () => ({ source: 'run', text, at }))
     $.ui.toast(`rook: ${text}`)
   } finally {
+    if (signal !== undefined && ctx.runAbort?.signal === signal) {
+      ctx.runAbort = undefined
+    }
+
     await update($, runningAtom, () => null)
     await poll($, ctx)
     await refreshBalance($, ctx)
@@ -688,7 +704,10 @@ async function startRun($: EngineInterface, ctx: Ctx, request: RunRequest, sourc
   await update($, runningAtom, () => ({ startedAt, label, source }))
   await update($, lastErrorAtom, () => null)
   await showStatus($, ctx)
-  $.clock.after(0, () => backgroundRun($, ctx, args.argv))
+  const abort = new AbortController()
+
+  ctx.runAbort = abort
+  $.clock.after(0, () => backgroundRun($, ctx, args.argv, abort.signal))
 
   return `rook: running ${label} in the background. Progress shows in the pane and the status line.`
 }
@@ -1676,6 +1695,53 @@ async function confirmNow($: EngineInterface, ctx: Ctx): Promise<void> {
 // ══ end feature: progress ════════════════════════════════════════════════════
 
 // ══ feature: health (Unable to Verify fixer, cancel, run confirm) ════════════
+
+/** The pane's Cancel on a run the person started: the child ends, backgroundRun clears the rest and says so. */
+async function cancelRun($: EngineInterface, ctx: Ctx): Promise<void> {
+  const running = await read($, runningAtom)
+
+  if (running === null || running.source === 'tool') {
+    return
+  }
+
+  if (ctx.runAbort !== undefined) {
+    ctx.runAbort.abort()
+
+    return
+  }
+
+  // Nothing of this load is running it (a reload ended the child): clear what says it is.
+  await update($, runningAtom, () => null)
+  $.ui.toast('rook: run cancelled')
+}
+
+/** One group of "what nobody looked at" handed to Claude: make the evidence observable, keep the criteria. */
+async function fixUnverified($: EngineInterface, ctx: Ctx, run: RookRunView, cause: GapCause): Promise<void> {
+  const loc = ctx.located ?? (await where($, ctx))
+  const group = gapGroups(unlooked(run)).find(g => g.cause === cause)
+
+  if (loc === undefined || group === undefined) {
+    return
+  }
+
+  const profile = await profileOf($, ctx)
+  const profileText = profile === undefined ? undefined : await ioOf($, ctx).read(`${loc.agentDir}/profiles/${profile.profileId}.yaml`)
+
+  await $.prompt.submit({
+    text: unverifiedPrompt({
+      runId: run.runId,
+      agentId: loc.agentId,
+      agentDir: loc.agentDir,
+      group,
+      ...(profile !== undefined && profileText !== undefined && { profileId: profile.profileId, profileText }),
+    }),
+  })
+}
+
+/** Park a run of these scenarios behind the confirm bar, with what it would cost. */
+async function confirmRun($: EngineInterface, run: RookRunView | undefined, label: string, only?: string[], count = only?.length ?? 0): Promise<void> {
+  await askConfirm($, { action: 'run', label, ...(only !== undefined && { only }), ...estimateOf(creditsPerScenario(run), count) })
+}
 // ══ end feature: health ══════════════════════════════════════════════════════
 
 // ══ feature: runs tab (history, compare) ═════════════════════════════════════
@@ -2269,6 +2335,8 @@ export const register: Register = (on, options) => {
     const run = snapshot.latest
     const failed = run?.rows.filter(row => row.status === 'Fail') ?? []
     const gaps = run === undefined ? [] : unlooked(run)
+    const gapGroupsNow = gapGroups(gaps)
+    const scenarioCount = snapshot.current.length + snapshot.neverRun
     const clusters = run?.finished ? orderedClusters(run).filter(cluster => cluster.kind !== 'unverifiable' || isExplained(cluster)) : []
     const clustered = new Set(clusters.flatMap(cluster => cluster.scenarios.map(s => s.id)))
     const loose = failed.filter(row => !clustered.has(row.id))
@@ -2424,9 +2492,12 @@ export const register: Register = (on, options) => {
           </Text>
         )}
         {running !== null && (
-          <Text color="cyan">
-            ▸ running {running.label} · {duration(Math.max(0, now - running.startedAt))}
-          </Text>
+          <Box key="running" flexDirection="row" gap={1}>
+            <Text color="cyan" wrap="truncate-end">
+              ▸ running {running.label} · {duration(Math.max(0, now - running.startedAt))}
+            </Text>
+            {running.source !== 'tool' && <Button key="cancel-run" label="Cancel" role="dismiss" onPress={() => cancelRun($, ctx)} />}
+          </Box>
         )}
         {run !== undefined &&
           !run.finished &&
@@ -2472,15 +2543,43 @@ export const register: Register = (on, options) => {
             </Text>
           </Box>
         ))}
-        {gaps.length > 0 && <Text bold>What nobody looked at</Text>}
-        {gaps.slice(0, 8).map(row => (
-          <Box key={`g-${row.id}`}>
-            <Text dimColor wrap="truncate-end">
-              ? {row.id}
-              {row.reason ? ` (${reasonText(row.reason)})` : ''} {gapText(row, width)}
-            </Text>
-          </Box>
-        ))}
+        {gapGroupsNow.length > 0 && <Text bold>What nobody looked at</Text>}
+        {run !== undefined &&
+          gapGroupsNow.map(group => (
+            <Box key={`uv-${group.cause}`} flexDirection="column">
+              <Text color="yellow" wrap="truncate-end">
+                ? {group.title} ({group.rows.length})
+              </Text>
+              {group.rows.slice(0, 6).map(row => (
+                <Box key={`g-${row.id}`} paddingLeft={2}>
+                  <Text dimColor wrap="truncate-end">
+                    {row.id}
+                    {row.reason ? ` (${reasonText(row.reason)})` : ''} {notesOf(row).length > 0 ? clip(notesOf(row).join('; '), width) : gapText(row, width)}
+                  </Text>
+                </Box>
+              ))}
+              <Box key={`uv-remedy-${group.cause}`} paddingLeft={2}>
+                <Text wrap="wrap">→ {group.remedy}</Text>
+              </Box>
+              <Box flexDirection="row" gap={1} paddingLeft={2}>
+                <Button key={`uv-fix-${group.cause}`} label="Fix with Claude" onPress={() => fixUnverified($, ctx, run, group.cause)} />
+                {canAct && (
+                  <Button
+                    key={`uv-retest-${group.cause}`}
+                    label={`Re-test ${group.rows.length === 1 ? 'this 1' : `these ${group.rows.length}`}`}
+                    onPress={() =>
+                      confirmRun(
+                        $,
+                        run,
+                        `Re-test ${plural(group.rows.length, 'scenario')}`,
+                        group.rows.map(row => row.id),
+                      )
+                    }
+                  />
+                )}
+              </Box>
+            </Box>
+          ))}
         {run?.finished && run.next.length > 0 && <Text bold>Next</Text>}
         {run?.finished &&
           run.next.slice(0, 3).map((step, at) => (
@@ -2489,9 +2588,21 @@ export const register: Register = (on, options) => {
             </Text>
           ))}
         <Box flexDirection="row" gap={1}>
-          {canAct && <Button key="run-all" label="Run all" hotkey="r" onPress={() => paneRun($, ctx, {})} />}
+          {canAct && (
+            <Button
+              key="run-all"
+              label="Run all"
+              hotkey="r"
+              onPress={() => confirmRun($, run, scenarioCount > 0 ? `Run all ${plural(scenarioCount, 'scenario')}` : 'Run all scenarios', undefined, scenarioCount)}
+            />
+          )}
           {canAct && failing.length > 0 && (
-            <Button key="rerun-failed" label="Re-run failed" hotkey="f" onPress={() => paneRun($, ctx, { only: failing })} />
+            <Button
+              key="rerun-failed"
+              label="Re-run failed"
+              hotkey="f"
+              onPress={() => confirmRun($, run, `Re-run ${plural(failing.length, 'failed scenario')}`, failing)}
+            />
           )}
           {failed.length > 0 && run !== undefined && (
             <Button key="fix" label="Fix with Claude" variant="primary" hotkey="x" onPress={() => fixWithClaude($, ctx, run)} />
