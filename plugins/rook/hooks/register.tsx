@@ -82,6 +82,11 @@ import type { ScenarioInfo as DrillScenarioInfo } from './scenarios'
 // ── end imports: drill-down
 
 // ── imports: home
+import { ChangeView, ReleaseView } from './views/home'
+import { bugReportPrompt, costOf, coverageOf, fixChangePrompt, gapsInstruction, isStaleVerdict, lastGreenOf, notYoursLine, ownedOf, readFeatures, regressionsOf, releaseOf } from './home'
+import type { ChangedFile, HomeFeature, HomeInput, HomeRow } from './home'
+import { changedSince, runStartMs } from './changes'
+import { historyRuns } from './evidence'
 // ── end imports: home
 
 // ── imports: trends
@@ -3139,6 +3144,216 @@ async function drillAction($: EngineInterface, ctx: Ctx, action: DetailActionId)
 // ══ end feature: drill-down ══════════════════════════════════════════════════
 
 // ══ feature: home (Release for QE, My change for dev) ════════════════════════
+
+/**
+ * What the first tab reads that the poll does not keep: the feature files (per
+ * change of the scenario set) and what each edited file reaches (per change of
+ * the edits). Caches, not state: a drawing reads them, never writes an atom.
+ */
+const homeCache: { features?: { key: string; list: HomeFeature[] }; reach?: { key: string; reaches: Map<string, Reach | undefined> } } = {}
+
+async function homeFeatures($: EngineInterface, ctx: Ctx): Promise<HomeFeature[]> {
+  const loc = ctx.located
+
+  if (loc === undefined) {
+    return []
+  }
+
+  const key = `${loc.agentDir}#${ctx.indexSignature ?? ''}`
+
+  if (homeCache.features?.key !== key) {
+    homeCache.features = { key, list: await readFeatures(ioOf($, ctx), loc.agentDir) }
+  }
+
+  return homeCache.features.list
+}
+
+/** Every scenario's newest verdict as a full row: the latest run's own, else the row cache or its verdict.yaml. */
+async function homeRows($: EngineInterface, ctx: Ctx, snapshot: RookSnapshot): Promise<HomeRow[]> {
+  const latest = snapshot.latest
+  const rows: HomeRow[] = []
+
+  for (const current of snapshot.current) {
+    const own = latest?.runId === current.runId ? latest.rows.find(row => row.id === current.id) : undefined
+    const row = own ?? (await scenarioVerdict($, ctx, current.id, current.runId)).row
+
+    if (row !== undefined) {
+      rows.push({ ...row, title: row.title || current.title, runId: current.runId })
+    }
+  }
+
+  return rows
+}
+
+async function homeInput($: EngineInterface, ctx: Ctx, snapshot: RookSnapshot): Promise<HomeInput> {
+  return {
+    rows: await homeRows($, ctx, snapshot),
+    ...(snapshot.latest !== undefined && { latest: snapshot.latest }),
+    verdicts: await read($, verdictsAtom),
+    scenarios: await scenarioList($, ctx),
+    features: await homeFeatures($, ctx),
+  }
+}
+
+/** Tracked files edited since the last green run (and those the band saw edited), each with the scenarios it reaches. */
+async function homeChanged($: EngineInterface, ctx: Ctx, lastGreen: string | undefined, rows: readonly HomeRow[]): Promise<ChangedFile[]> {
+  const loc = ctx.located
+
+  if (loc === undefined) {
+    return []
+  }
+
+  const stale = await read($, staleAtom)
+  const edits = new Map(changedSince(sourceStampsNow(ctx), lastGreen === undefined ? undefined : runStartMs(lastGreen)).map(f => [f.path, f.mtimeMs]))
+
+  for (const file of stale?.files ?? []) {
+    if (!edits.has(file)) {
+      edits.set(file, stale!.since)
+    }
+  }
+
+  if (edits.size === 0) {
+    return []
+  }
+
+  const io = ioOf($, ctx)
+  const key = `${loc.agentDir}#${ctx.indexSignature ?? ''}#${[...edits].map(([path, at]) => `${path}@${at}`).join(',')}`
+
+  if (homeCache.reach?.key !== key) {
+    const index = ctx.agentIndex ?? (await indexAgent(io, loc.agentDir))
+    const reaches = new Map<string, Reach | undefined>()
+
+    for (const path of edits.keys()) {
+      reaches.set(path, await reach(index, path, file => io.read(file)).catch(() => undefined))
+    }
+
+    homeCache.reach = { key, reaches }
+  }
+
+  const reaches = homeCache.reach.reaches
+  const staleIds = new Set(stale?.scenarios.map(s => s.id) ?? [])
+  const byId = new Map(rows.map(row => [row.id, row]))
+
+  return [...edits]
+    .sort((a, b) => b[1] - a[1])
+    .map(([path, mtimeMs]) => {
+      const reached = reaches.get(path)
+
+      return {
+        path,
+        mtimeMs,
+        scenarios: (reached?.scenarios ?? []).map(s => {
+          const row = byId.get(s.id)
+
+          return { id: s.id, ...(row !== undefined && { status: row.status }), isStale: isStaleVerdict(row?.runId, mtimeMs, staleIds, s.id) }
+        }),
+        ...(reached?.reason !== undefined && { reason: reached.reason }),
+      }
+    })
+}
+
+/** Everything My change shows and acts on. */
+async function homeChange($: EngineInterface, ctx: Ctx, snapshot: RookSnapshot) {
+  const input = await homeInput($, ctx, snapshot)
+  const owned = ownedOf(input)
+  const lastGreen = lastGreenOf(input.verdicts)
+  const regressions = regressionsOf(owned, input.verdicts, lastGreen)
+  const changed = await homeChanged($, ctx, lastGreen, input.rows)
+  const latest = snapshot.latest
+  const runs = historyRuns(input.verdicts)
+  const at = latest === undefined ? -1 : runs.indexOf(latest.runId)
+  const previousRunId = at > 0 ? runs[at - 1] : undefined
+  const before: RookScenarioRow[] = []
+
+  if (previousRunId !== undefined) {
+    for (const h of input.verdicts.filter(v => v.runs.some(r => r.runId === previousRunId))) {
+      const row = (await scenarioVerdict($, ctx, h.id, previousRunId)).row
+
+      if (row !== undefined) {
+        before.push(row)
+      }
+    }
+  }
+
+  const stale = await read($, staleAtom)
+  const affected = [...new Set([...changed.flatMap(f => f.scenarios.map(s => s.id)), ...(stale?.scenarios.map(s => s.id) ?? [])])]
+  const notYours = notYoursLine(owned)
+
+  return {
+    ...(lastGreen !== undefined && { lastGreen }),
+    regressions,
+    changed,
+    cost: costOf(latest?.rows ?? [], before),
+    ...(previousRunId !== undefined && { previousRunId }),
+    ...(notYours !== undefined && { notYours }),
+    affected,
+  }
+}
+
+/** Draft bug reports for the blockers [d]: Claude writes them from the evidence alone. */
+async function homeDraft($: EngineInterface, ctx: Ctx): Promise<void> {
+  const loc = ctx.located ?? (await where($, ctx))
+  const snapshot = await read($, snapshotAtom)
+
+  if (loc === undefined || snapshot === null) {
+    return
+  }
+
+  const release = releaseOf(await homeInput($, ctx, snapshot))
+
+  if (release.blockers.length > 0) {
+    await $.prompt.submit({ text: bugReportPrompt({ agentId: loc.agentId, agentDir: loc.agentDir, blockers: release.blockers }) })
+  }
+}
+
+/** Generate for gaps [n]: through the generate confirm, naming the features no scenario covers. */
+async function homeGenerate($: EngineInterface, ctx: Ctx): Promise<void> {
+  if (ctx.located === undefined) {
+    return
+  }
+
+  const gaps = coverageOf(await homeFeatures($, ctx), await scenarioList($, ctx)).gaps
+
+  if (gaps.length > 0) {
+    await askConfirm($, {
+      action: 'generate',
+      instruction: gapsInstruction(gaps).slice(0, 2000),
+      label: `Generate scenarios for ${plural(gaps.length, 'uncovered feature')}: ${clip(gaps.map(f => f.id).join(', '), 60)}`,
+    })
+  }
+}
+
+/** Fix N with Claude [x]: the regressions' evidence and the files changed since the last green run. */
+async function homeFix($: EngineInterface, ctx: Ctx): Promise<void> {
+  const loc = ctx.located ?? (await where($, ctx))
+  const snapshot = await read($, snapshotAtom)
+
+  if (loc === undefined || snapshot === null) {
+    return
+  }
+
+  const change = await homeChange($, ctx, snapshot)
+
+  if (change.regressions.length > 0) {
+    await $.prompt.submit({ text: fixChangePrompt({ agentId: loc.agentId, agentDir: loc.agentDir, ...change }) })
+  }
+}
+
+/** Re-test stale/affected [a]: the run confirm with only the scenarios the edits reach. */
+async function homeRetest($: EngineInterface, ctx: Ctx): Promise<void> {
+  const snapshot = await read($, snapshotAtom)
+
+  if (snapshot === null) {
+    return
+  }
+
+  const { affected } = await homeChange($, ctx, snapshot)
+
+  if (affected.length > 0) {
+    await confirmRun($, snapshot.latest, `Re-test ${plural(affected.length, 'affected scenario')}`, affected)
+  }
+}
+
 // ══ end feature: home ════════════════════════════════════════════════════════
 
 // ══ feature: trends (heat grid, runs per scenario) ═══════════════════════════
@@ -3935,90 +4150,69 @@ export const register: Register = (on, options) => {
     // ── end pane seam: setup tab
 
     // The Health tab. ── pane seam: health (owned by the health feature, through the end of this hook)
+    // Release for a QE, My change for a developer (feature: home).
     // Results can be read while rook would refuse to run (no project selected, signed out…): say so, offer no run.
     const runBlock = blockedText(readiness, NEEDS.run, 'run')
 
     const run = snapshot.latest
     const failed = run?.rows.filter(row => row.status === 'Fail') ?? []
-    const gaps = run === undefined ? [] : unlooked(run)
-    const gapGroupsNow = gapGroups(gaps)
     const scenarioCount = snapshot.current.length + snapshot.neverRun
-    const clusters = run?.finished ? orderedClusters(run).filter(cluster => cluster.kind !== 'unverifiable' || isExplained(cluster)) : []
-    const clustered = new Set(clusters.flatMap(cluster => cluster.scenarios.map(s => s.id)))
-    const loose = failed.filter(row => !clustered.has(row.id))
-    // Scenarios whose newest verdict is a Fail from an earlier run: the latest run did not cover them.
-    const earlier = snapshot.current.filter(row => row.status === 'Fail' && row.runId !== run?.runId)
-    const failing = [...new Set([...failed.map(row => row.id), ...earlier.map(row => row.id)])]
-    const health = countsOf(snapshot.current)
-    const moved = changesIn(snapshot.current, run?.runId)
+    // Scenarios whose newest verdict is a Fail, from whichever run: Re-run failed.
+    const failing = [...new Set([...failed.map(row => row.id), ...snapshot.current.filter(row => row.status === 'Fail').map(row => row.id)])]
     // Runs need nothing in flight and a checklist that allows them; the agent switch below needs only the first.
     const canAct = running === null && runBlock === undefined
-    const toggle = (id: string) => update($, expandedAtom, open => (open === id ? null : id))
+    const runLine =
+      run === undefined
+        ? undefined
+        : `${run.name ? `${run.name} · ` : ''}${run.runId} · ${run.done}/${run.planned} ${run.stopped ? 'stopped' : run.finished ? 'done' : isReporting(run) ? REPORTING : 'running'}` +
+          `${(snapshot.runCount ?? 0) > 1 ? ` · ${snapshot.runCount} runs (/rook runs)` : ''}`
+    const common = {
+      el,
+      width,
+      ...(runLine !== undefined && { runLine }),
+      canAct,
+      failing: failing.length,
+      viewerUrl,
+      onOpen: (runId: string, id: string) => openDetail($, ctx, runId, id),
+      onRunAll: () => confirmRun($, run, scenarioCount > 0 ? `Run all ${plural(scenarioCount, 'scenario')}` : 'Run all scenarios', undefined, scenarioCount),
+      onRerunFailed: () => confirmRun($, run, `Re-run ${plural(failing.length, 'failed scenario')}`, failing),
+      onViewer: async () => $.ui.toast(toastText(await startViewer($, ctx))),
+    }
 
-    const rowDetail = (row: RookScenarioRow, isFixable = true) => (
-      <Box key={`d-${row.id}`} flexDirection="column" paddingLeft={2}>
-        {row.failing.slice(0, 6).map(c => (
-          <Box key={`d-${row.id}-${c.id}`} flexDirection="column">
-            <Text wrap="wrap">
-              <Text bold>{c.id}</Text> {clip(c.criterion, 300)}
-            </Text>
-            <Text wrap="wrap">
-              <Text color="green">expected </Text>
-              {clip(c.expected, 400)}
-            </Text>
-            <Text wrap="wrap">
-              <Text color="red">achieved </Text>
-              {clip(c.achieved, 400)}
-            </Text>
-            {c.evidence !== '' && (
-              <Text dimColor wrap="wrap">
-                evidence {excerpt(c.evidence, 600)}
-              </Text>
-            )}
-          </Box>
-        ))}
-        {row.failing.length === 0 && <Text wrap="wrap">{clip(row.summary, 400)}</Text>}
-        {isFixable && fixButton(row.id)}
-      </Box>
-    )
+    let body: unknown
 
-    const clusterDetail = (cluster: RookCluster) => (
-      <Box key={`d-${cluster.id}`} flexDirection="column" paddingLeft={2}>
-        {cluster.cause !== undefined && <Text wrap="wrap">cause: {clip(cluster.cause, 600)}</Text>}
-        {cluster.fault !== undefined && (
-          <Text color={cluster.fault === 'agent' ? undefined : 'yellow'}>
-            fault: {cluster.fault}
-            {cluster.confidence ? ` · ${cluster.confidence} confidence` : ''}
-          </Text>
-        )}
-        {cluster.where.length > 0 && <Text dimColor wrap="truncate-end">where: {cluster.where.join(', ')}</Text>}
-        {cluster.remedy !== undefined && <Markdown key={`m-${cluster.id}`} text={excerpt(`**Remedy**\n\n${cluster.remedy}`, 9000)} />}
-        {!isExplained(cluster) && (
-          <Text dimColor wrap="wrap">
-            Not explained yet. Explain with rca asks rook for the cause and a remedy from this run's evidence, without calling the agent again: free if
-            this agent version was explained already, otherwise it costs credits.
-          </Text>
-        )}
-        {!isExplained(cluster) && run !== undefined && explaining === null && (
-          <Button key="explain-rca" label="Explain with rca" onPress={() => paneExplain($, ctx, run.runId)} />
-        )}
-        {!isExplained(cluster) && explaining !== null && <Text color="cyan">▸ rook is explaining {explaining}</Text>}
-        {cluster.scenarios.slice(0, 8).flatMap(s => {
-          const row = run?.rows.find(r => r.id === s.id)
+    if (lens === 'dev') {
+      const change = await homeChange($, ctx, snapshot)
 
-          return [
-            <Text key={`d-${cluster.id}-${s.id}`} wrap="truncate-end">
-              <Text color="red">✗ {s.id}</Text> {s.title}
-            </Text>,
-            ...(row !== undefined && row.status === 'Fail' ? [rowDetail(row, false)] : []),
-          ]
-        })}
-        {fixButton(cluster.id)}
-      </Box>
-    )
+      body = <ChangeView {...common} {...change} onFix={() => homeFix($, ctx)} onRetest={() => homeRetest($, ctx)} />
+    } else {
+      const release = releaseOf(await homeInput($, ctx, snapshot))
+      const moved = changesIn(snapshot.current, run?.runId)
 
-    function fixButton(id: string) {
-      return run !== undefined ? <Button key={`fix-${id}`} label="Fix this with Claude" onPress={() => fixOne($, ctx, run, id)} /> : null
+      body = (
+        <ReleaseView
+          {...common}
+          release={release}
+          counts={countsOf(snapshot.current)}
+          neverRun={snapshot.neverRun}
+          {...(run?.finished && { metrics: metricsLine(run) })}
+          moved={{ fixed: moved.fixed.map(row => row.id), regressed: moved.regressed.map(row => row.id) }}
+          {...(run?.headline !== undefined && { headline: run.headline })}
+          next={run?.finished ? run.next : []}
+          clusters={run?.finished ? orderedClusters(run).filter(cluster => cluster.kind !== 'unverifiable' || isExplained(cluster)) : []}
+          runRows={run?.rows ?? []}
+          expanded={expanded}
+          explaining={explaining}
+          gapGroups={run === undefined ? [] : gapGroups(unlooked(run))}
+          onToggle={id => update($, expandedAtom, open => (open === id ? null : id))}
+          onExplain={() => (run === undefined ? undefined : paneExplain($, ctx, run.runId))}
+          onFixOne={id => (run === undefined ? undefined : fixOne($, ctx, run, id))}
+          onFixGaps={cause => (run === undefined ? undefined : fixUnverified($, ctx, run, cause))}
+          onRetestGaps={(_cause, ids) => confirmRun($, run, `Re-test ${plural(ids.length, 'scenario')}`, ids)}
+          onDraft={() => homeDraft($, ctx)}
+          onGenerate={() => homeGenerate($, ctx)}
+        />
+      )
     }
 
     return frame(
@@ -4048,15 +4242,6 @@ export const register: Register = (on, options) => {
             </Text>
           </Box>
         )}
-        {snapshot.current.length > 0 && (
-          <Box flexDirection="row" gap={2}>
-            <Text dimColor>agent</Text>
-            <Text color="green">✓ {health.pass}</Text>
-            <Text color="red">✗ {health.fail}</Text>
-            <Text color="yellow">? {health.unverifiable}</Text>
-            {snapshot.neverRun > 0 && <Text dimColor>{snapshot.neverRun} never run</Text>}
-          </Box>
-        )}
         {run === undefined && (
           <Text dimColor>
             {snapshot.neverRun > 0 ? `${snapshot.neverRun} scenarios, none run yet.` : 'No runs yet.'}
@@ -4071,158 +4256,7 @@ export const register: Register = (on, options) => {
             </Text>
           </Box>
         )}
-        {run !== undefined && (
-          <Text dimColor wrap="truncate-end">
-            latest: {run.name ? `${run.name} · ` : ''}
-            {run.runId}
-            {(snapshot.runCount ?? 0) > 1 ? ` · ${snapshot.runCount} runs (/rook runs)` : ''}
-          </Text>
-        )}
-        {run !== undefined && (
-          <Text>
-            {progressBar(run.done, run.planned, Math.min(30, width - 16))} {run.done}/{run.planned} {run.stopped ? 'stopped' : run.finished ? 'done' : isReporting(run) ? REPORTING : 'running'}
-          </Text>
-        )}
-        {run !== undefined && (
-          <Box flexDirection="row" gap={2}>
-            <Text color="green">✓ {run.counts.pass} Pass</Text>
-            <Text color="red">✗ {run.counts.fail} Fail</Text>
-            <Text color="yellow">? {run.counts.unverifiable} Unable to Verify</Text>
-          </Box>
-        )}
-        {run?.finished && metricsLine(run) !== '' && <Text dimColor>{metricsLine(run)}</Text>}
-        {(moved.fixed.length > 0 || moved.regressed.length > 0) && (
-          <Text wrap="truncate-end">
-            {moved.fixed.length > 0 && <Text color="green">↑ fixed {moved.fixed.map(row => row.id).join(', ')} </Text>}
-            {moved.regressed.length > 0 && <Text color="red">↓ regressed {moved.regressed.map(row => row.id).join(', ')}</Text>}
-          </Text>
-        )}
-        {running !== null && (
-          <Box key="running" flexDirection="row" gap={1}>
-            <Text color="cyan" wrap="truncate-end">
-              ▸ running {running.label} · {liveTime(Math.max(0, now - running.startedAt))}
-            </Text>
-            {running.source !== 'tool' && <Button key="cancel-run" label="Cancel" hotkey="c" role="dismiss" onPress={() => cancelRun($, ctx)} />}
-          </Box>
-        )}
-        {run !== undefined &&
-          !run.finished &&
-          run.lanes.slice(0, 8).map(lane => {
-            const elapsed = lane.since > 0 ? Math.max(0, now - lane.since) : undefined
-
-            return (
-              <Box key={`l-${lane.id}`}>
-                <Text wrap="truncate-end">
-                  <Text color="cyan">⟡ {lane.id}</Text>
-                  {elapsed !== undefined && <Text color={elapsed > 60_000 ? 'yellow' : undefined}> {liveTime(elapsed)}</Text>}
-                  <Text dimColor> {lane.phase}</Text> {lane.title}
-                </Text>
-              </Box>
-            )
-          })}
-        {run?.headline !== undefined && <Text wrap="wrap">{run.headline}</Text>}
-        {clusters.length > 0 && <Text bold>Clusters</Text>}
-        {clusters.slice(0, 8).flatMap(cluster => [
-          <Button
-            key={`c-${cluster.id}`}
-            plain
-            label={`${expanded === cluster.id ? '▾' : '▸'} ${cluster.id} ${cluster.kind === 'compromised' ? '[compromised] ' : ''}${clip(cluster.why, width - 24)} (${cluster.scenarios.length})${isExplained(cluster) ? ' · remedy' : ''}`}
-            onPress={() => toggle(cluster.id)}
-          />,
-          ...(expanded === cluster.id ? [clusterDetail(cluster)] : []),
-        ])}
-        {loose.length > 0 && <Text bold>Failed</Text>}
-        {loose.slice(0, 12).flatMap(row => [
-          <Button
-            key={`f-${row.id}`}
-            plain
-            label={`${expanded === row.id ? '▾' : '▸'} ✗ ${row.id} ${row.compromised ? '[compromised] ' : ''}${clip(row.title || row.summary, width - 16)}`}
-            onPress={() => toggle(row.id)}
-          />,
-          ...(expanded === row.id ? [rowDetail(row)] : []),
-        ])}
-        {earlier.length > 0 && <Text bold>Still failing from earlier runs</Text>}
-        {earlier.slice(0, 12).map(row => (
-          <Box key={`e-${row.id}`}>
-            <Text wrap="truncate-end">
-              <Text color="red">✗ {row.id}</Text> {row.title} <Text dimColor>· {row.runId}</Text>
-            </Text>
-          </Box>
-        ))}
-        {gapGroupsNow.length > 0 && <Text bold>What nobody looked at</Text>}
-        {run !== undefined &&
-          gapGroupsNow.map(group => (
-            <Box key={`uv-${group.cause}`} flexDirection="column">
-              <Text color="yellow" wrap="truncate-end">
-                ? {group.title} ({group.rows.length})
-              </Text>
-              {group.rows.slice(0, 6).map(row => (
-                <Box key={`g-${row.id}`} paddingLeft={2}>
-                  <Text dimColor wrap="truncate-end">
-                    {row.id}
-                    {row.reason ? ` (${reasonText(row.reason)})` : ''} {notesOf(row).length > 0 ? clip(notesOf(row).join('; '), width) : gapText(row, width)}
-                  </Text>
-                </Box>
-              ))}
-              <Box key={`uv-remedy-${group.cause}`} paddingLeft={2}>
-                <Text wrap="wrap">→ {group.remedy}</Text>
-              </Box>
-              <Box flexDirection="row" gap={1} paddingLeft={2}>
-                <Button key={`uv-fix-${group.cause}`} label="Fix with Claude" onPress={() => fixUnverified($, ctx, run, group.cause)} />
-                {canAct && (
-                  <Button
-                    key={`uv-retest-${group.cause}`}
-                    label={`Re-test ${group.rows.length === 1 ? 'this 1' : `these ${group.rows.length}`}`}
-                    onPress={() =>
-                      confirmRun(
-                        $,
-                        run,
-                        `Re-test ${plural(group.rows.length, 'scenario')}`,
-                        group.rows.map(row => row.id),
-                      )
-                    }
-                  />
-                )}
-              </Box>
-            </Box>
-          ))}
-        {run?.finished && run.next.length > 0 && <Text bold>Next</Text>}
-        {run?.finished &&
-          run.next.slice(0, 3).map((step, at) => (
-            <Text key={`n-${at}`} dimColor wrap="wrap">
-              · {clip(step, 240)}
-            </Text>
-          ))}
-        <Box flexDirection="row" gap={1}>
-          {canAct && (
-            <Button
-              key="run-all"
-              label="Run all"
-              hotkey="r"
-              onPress={() => confirmRun($, run, scenarioCount > 0 ? `Run all ${plural(scenarioCount, 'scenario')}` : 'Run all scenarios', undefined, scenarioCount)}
-            />
-          )}
-          {canAct && failing.length > 0 && (
-            <Button
-              key="rerun-failed"
-              label="Re-run failed"
-              hotkey="f"
-              onPress={() => confirmRun($, run, `Re-run ${plural(failing.length, 'failed scenario')}`, failing)}
-            />
-          )}
-          {failed.length > 0 && run !== undefined && (
-            <Button key="fix" label="Fix with Claude" variant="primary" hotkey="x" onPress={() => fixWithClaude($, ctx, run)} />
-          )}
-          {viewerUrl === null && (
-            <Button key="viewer" label="Evidence viewer" hotkey="v" onPress={async () => $.ui.toast(toastText(await startViewer($, ctx)))} />
-          )}
-        </Box>
-        {viewerUrl !== null && (
-          <Box key="viewer-link">
-            {/* rook's viewer answers localhost as well as 127.0.0.1; a Link takes only the name. */}
-            <Link href={viewerUrl.replace('//127.0.0.1:', '//localhost:')} label={`evidence viewer ${viewerUrl.replace('//127.0.0.1:', '//localhost:')}`} />
-          </Box>
-        )}
+        {body as never}
       </Box>
     )
   })
