@@ -1928,8 +1928,20 @@ async function curateReply($: EngineInterface, ctx: Ctx, verb: string, ids: stri
 
 // ── shared: tabs and the confirm bar ─────────────────────────────────────────
 
+/** A tab is a place to go: it closes the drill-down, which would otherwise stay over every tab. */
 async function setTab($: EngineInterface, tab: RookTab): Promise<void> {
   await update($, tabAtom, () => tab)
+  await update($, detailAtom, () => null)
+  await update($, evidenceAtom, () => null)
+}
+
+/**
+ * Keep the keys in the pane after the pressed button goes away (Back, a tab,
+ * the confirm bar): the ring lands on the always-drawn view switch instead of
+ * dropping to the prompt, so the next key still reaches the pane.
+ */
+async function keepFocus($: EngineInterface): Promise<void> {
+  await $.ui.focus({ requestId: PANE, key: 'lens' }).catch(() => undefined)
 }
 
 // ── shared: lens, focus and the drill-down ───────────────────────────────────
@@ -1991,6 +2003,7 @@ function sourceStampsNow(ctx: Ctx): ReadonlyMap<string, number> | undefined {
 async function closeDetail($: EngineInterface): Promise<void> {
   await update($, detailAtom, () => null)
   await update($, evidenceAtom, () => null)
+  await keepFocus($)
 }
 
 /** Each scenario's newest verdicts across runs: re-read only when the agent's runs changed. Called at the end of every poll. */
@@ -4259,7 +4272,20 @@ export const register: Register = (on, options) => {
     // ── end pane seam: progress
 
     const confirmView =
-      confirm === null ? null : <ConfirmBar el={el} confirm={confirm} onConfirm={() => confirmNow($, ctx)} onCancel={() => update($, confirmAtom, () => null)} />
+      confirm === null ? null : (
+        <ConfirmBar
+          el={el}
+          confirm={confirm}
+          onConfirm={async () => {
+            await confirmNow($, ctx)
+            await keepFocus($)
+          }}
+          onCancel={async () => {
+            await update($, confirmAtom, () => null)
+            await keepFocus($)
+          }}
+        />
+      )
     const readiness = snapshot?.readiness
     const failedBefore = lastError !== null && (
       <Box key="last-error">
@@ -4330,7 +4356,7 @@ export const register: Register = (on, options) => {
     const frame = (body: unknown) => (
       <Box flexDirection="column">
         {header}
-        <TabBar el={el} tab={tab} lens={lens} onTab={next => setTab($, next)} onLens={() => toggleLens($)} />
+        <TabBar el={el} tab={tab} lens={lens} onTab={async next => { await setTab($, next); await keepFocus($) }} onLens={() => toggleLens($)} />
         {failedBefore}
         {jobView}
         {confirmView}

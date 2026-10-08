@@ -276,6 +276,19 @@ describe('drill-down · the pane', () => {
     await ui.unmount()
   })
 
+  test('a tab key is a place to go: it closes the drill-down instead of hiding behind it', async ($, on) => {
+    await start($, on)
+    const ui = await mount($)
+
+    await ui.press({ key: 'sc-SC-004' })
+    expect(await ui.find({ key: 'detail-back' })).toBeDefined()
+
+    await ui.press({ key: 'tab-runs' })
+    expect(await ui.find({ key: 'detail-back' })).toBeUndefined()
+    expect(await ui.find({ text: /finished runs/ })).toBeDefined()
+    await ui.unmount()
+  })
+
   test('the developer lens reorders the sections and leads with Fix with Claude; Re-test asks to confirm one scenario', async ($, on) => {
     const { world, clock } = await start($, on)
     const ui = await mount($)
