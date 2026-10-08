@@ -15,6 +15,8 @@ import { JobLanes } from './views/job'
 
 // ── imports: runs tab
 import { RunsTab } from './views/runs'
+import { comparePair, compareText, diffRuns, historyOf, historySignature, ordered } from './history'
+import type { RunDiff } from './history'
 // ── end imports: runs tab
 
 // ── imports: scenarios tab
@@ -166,6 +168,8 @@ const jobAtom = atom({ plugin: 'rook', key: 'job' } as const, null)
 // ── atoms: runs tab
 const historyAtom = atom({ plugin: 'rook', key: 'history' } as const, null)
 const compareAtom = atom({ plugin: 'rook', key: 'compare' } as const, [])
+const runOpenAtom = atom({ plugin: 'rook', key: 'runOpen' } as const, null)
+const runDiffAtom = atom({ plugin: 'rook', key: 'runDiff' } as const, null)
 // ── end atoms: runs tab
 
 // ── atoms: scenarios tab
@@ -206,6 +210,7 @@ const PROFILE_TOOL = /^mcp__rook__profile_test$/
 const AGENT_TOOL = /^mcp__rook__agent$/
 const CURATE_TOOL = /^mcp__rook__curate$/
 // ── tool patterns: runs tab
+const COMPARE_TOOL = /^mcp__rook__compare$/
 // ── end tool patterns: runs tab
 // ── tool patterns: setup tab
 // ── end tool patterns: setup tab
@@ -262,6 +267,8 @@ type Ctx = {
   rows: RowCache
   /** Installed and signed in, as the CLI last said: probed at start and when they block, not every poll. */
   cli: CliFacts
+  /** The agent's runs list as the Runs tab last read it, to skip re-reading when nothing changed. */
+  historySignature?: string
 }
 
 function textOption(value: unknown, fallback: string): string {
@@ -513,6 +520,7 @@ async function poll($: EngineInterface, ctx: Ctx): Promise<void> {
       await finished($, ctx, loc, latest, before?.agentId !== loc.agentId)
     }
   } finally {
+    await refreshHistory($, ctx)
     ctx.isPolling = false
     await showStatus($, ctx)
   }
@@ -1686,13 +1694,177 @@ async function confirmNow($: EngineInterface, ctx: Ctx): Promise<void> {
 
 // ══ feature: runs tab (history, compare) ═════════════════════════════════════
 
-/** `/rook compare <run> <run>`. */
-async function compareReply($: EngineInterface, ctx: Ctx, args: string[]): Promise<string> {
-  void $
-  void ctx
-  void args
+/** The Runs tab's list: re-read only when the agent's runs on disk changed. Called at the end of every poll. */
+async function refreshHistory($: EngineInterface, ctx: Ctx): Promise<void> {
+  try {
+    const loc = ctx.located
 
-  return 'rook: compare is not built yet.'
+    if (loc === undefined) {
+      if (ctx.historySignature !== undefined) {
+        ctx.historySignature = undefined
+        await update($, historyAtom, () => null)
+      }
+
+      return
+    }
+
+    const io = ioOf($, ctx)
+    const ids = await runIds(io, loc.agentDir)
+    const latest = (await read($, snapshotAtom))?.latest
+    const signature = historySignature(loc.agentDir, ids, latest?.runId === ids[0] && latest?.finished === true)
+
+    if (signature === ctx.historySignature) {
+      return
+    }
+
+    ctx.historySignature = signature
+    const history = await historyOf(io, loc.agentDir, ids)
+
+    await update($, historyAtom, () => history)
+  } catch {
+    ctx.historySignature = undefined // read again next poll
+  }
+}
+
+/** Two runs of the agent, diffed scenario by scenario; the two newest finished runs by default. */
+async function diffOf($: EngineInterface, ctx: Ctx, loc: Located, baseRef?: string, headRef?: string): Promise<RunDiff | { error: string }> {
+  const io = ioOf($, ctx)
+  const ids = await runIds(io, loc.agentDir)
+  const pool = baseRef === undefined && headRef === undefined ? (await historyOf(io, loc.agentDir, ids, 2)).map(run => run.runId) : ids
+  const pair = comparePair(pool, baseRef, headRef)
+
+  if ('error' in pair) {
+    return pair
+  }
+
+  const base = await readRun(io, loc.agentDir, pair.base, ctx.rows)
+  const head = await readRun(io, loc.agentDir, pair.head, ctx.rows)
+
+  if (base === undefined || head === undefined) {
+    return { error: `run ${base === undefined ? pair.base : pair.head} has no run.yaml.` }
+  }
+
+  return diffRuns(base, head)
+}
+
+/** The diff as text, for `/rook compare` and the compare tool: disk only, no credits. */
+async function compareRuns($: EngineInterface, ctx: Ctx, baseRef: string | undefined, headRef: string | undefined): Promise<string> {
+  const blocked = await setupBlock($, ctx, ['agent'], 'compare runs')
+  const loc = await where($, ctx)
+
+  if (blocked !== undefined || loc === undefined) {
+    return `rook: ${blocked ?? "can't compare runs yet: no agent here."}`
+  }
+
+  const bad = [baseRef, headRef].find(ref => ref !== undefined && !RUN_ID.test(ref))
+
+  if (bad !== undefined) {
+    return `rook: "${clip(bad, 40)}" is not a run id (2026-09-28T15-54-56Z form).`
+  }
+
+  const diff = await diffOf($, ctx, loc, baseRef, headRef)
+
+  return 'error' in diff ? `rook: ${diff.error}` : compareText(loc.agentId, diff)
+}
+
+/** `/rook compare [base] [head]`. */
+async function compareReply($: EngineInterface, ctx: Ctx, args: string[]): Promise<string> {
+  if (args.length > 2) {
+    return 'rook: compare [base run] [head run]; with none, the two newest finished runs.'
+  }
+
+  return compareRuns($, ctx, args[0], args[1])
+}
+
+/** The Runs tab opens a run: read from disk once, kept until Back. */
+async function openRun($: EngineInterface, ctx: Ctx, runId: string): Promise<void> {
+  const loc = ctx.located ?? (await where($, ctx))
+  const run = loc === undefined ? undefined : await readRun(ioOf($, ctx), loc.agentDir, runId, ctx.rows)
+
+  if (run === undefined) {
+    $.ui.toast(`rook: run ${runId} could not be read.`)
+
+    return
+  }
+
+  await update($, runOpenAtom, () => run)
+}
+
+async function closeRun($: EngineInterface): Promise<void> {
+  await update($, runOpenAtom, () => null)
+}
+
+/** "Report to Claude": the opened run's failures (or its summary) as a prompt. */
+async function reportRun($: EngineInterface, ctx: Ctx): Promise<void> {
+  const run = await read($, runOpenAtom)
+  const loc = ctx.located ?? (await where($, ctx))
+
+  if (run === null || loc === undefined) {
+    return
+  }
+
+  if (run.counts.fail > 0) {
+    await fixWithClaude($, ctx, run)
+
+    return
+  }
+
+  await $.prompt.submit({ text: `${runSummary(run, loc.agentDir, loc.agentId)}
+
+Nothing failed in this run. Say whether anything above needs attention.` })
+}
+
+/** "Explain with rca" on the opened run. */
+async function explainRun($: EngineInterface, ctx: Ctx): Promise<void> {
+  const run = await read($, runOpenAtom)
+
+  if (run !== null) {
+    await paneExplain($, ctx, run.runId)
+  }
+}
+
+/** "Compare with…": the opened run is the first of two; the list then picks the second. */
+async function compareWith($: EngineInterface): Promise<void> {
+  const run = await read($, runOpenAtom)
+
+  if (run !== null) {
+    await update($, runDiffAtom, () => null)
+    await update($, compareAtom, () => [run.runId])
+  }
+}
+
+/** A run picked in the list: the second of two diffs them, older as base. */
+async function pickRun($: EngineInterface, ctx: Ctx, runId: string): Promise<void> {
+  const picked = await read($, compareAtom)
+
+  if (picked.length !== 1 || picked[0] === runId) {
+    await update($, compareAtom, () => [runId])
+
+    return
+  }
+
+  const [base, head] = ordered(picked[0]!, runId)
+  const loc = ctx.located ?? (await where($, ctx))
+  const diff = loc === undefined ? { error: 'no agent here.' } : await diffOf($, ctx, loc, base, head)
+
+  if ('error' in diff) {
+    $.ui.toast(`rook: ${diff.error}`)
+
+    return
+  }
+
+  await update($, runDiffAtom, () => diff)
+  await update($, compareAtom, () => [base, head])
+}
+
+/** Cancel a pick (back to the opened run), or leave a comparison (back to the list). */
+async function clearCompare($: EngineInterface): Promise<void> {
+  if ((await read($, compareAtom)).length === 2) {
+    await update($, runOpenAtom, () => null)
+  }
+
+  await update($, compareAtom, () => [])
+  await update($, runDiffAtom, () => null)
 }
 
 // ══ end feature: runs tab ════════════════════════════════════════════════════
@@ -2111,6 +2283,22 @@ export const register: Register = (on, options) => {
     })
 
     // ── tool registrations: runs tab
+    await $.tool.register({
+      name: 'compare',
+      description:
+        'Compare two rook runs of the agent under test, reading only the files on disk (no credits, no rook CLI call, no agent call). ' +
+        'Per scenario: fixed (Fail or Unable to Verify → Pass), regressed (Pass → Fail or Unable to Verify), new in head, missing from head, still failing; ' +
+        'plus the Pass / Fail / Unable to Verify, pass-rate and credits deltas. Defaults to the two newest finished runs; ' +
+        'with only base, head is the newest run; with only head, base is the run before it. The rook runs tool lists run ids.',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          base: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}Z(-\\d+)?$', description: 'The earlier run id' },
+          head: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}Z(-\\d+)?$', description: 'The later run id' },
+        },
+      },
+    })
     // ── end tool registrations: runs tab
 
     // ── tool registrations: setup tab
@@ -2264,6 +2452,11 @@ export const register: Register = (on, options) => {
   })
 
   // ── tool handlers: runs tab
+  on('tool.call', { tool: COMPARE_TOOL }, async ($, e) => {
+    const { base, head } = e as unknown as { base?: unknown; head?: unknown }
+
+    return { result: await compareRuns($, ctx, typeof base === 'string' ? base : undefined, typeof head === 'string' ? head : undefined) }
+  })
   // ── end tool handlers: runs tab
 
   // ── tool handlers: setup tab
@@ -2397,7 +2590,28 @@ export const register: Register = (on, options) => {
 
     // ── pane seam: runs tab
     if (tab === 'runs') {
-      return frame(<RunsTab el={el} />)
+      const history = await read($, historyAtom)
+      const runOpen = await read($, runOpenAtom)
+      const compare = await read($, compareAtom)
+      const runDiff = await read($, runDiffAtom)
+
+      return frame(
+        <RunsTab
+          el={el}
+          history={history}
+          open={runOpen}
+          compare={compare}
+          diff={runDiff}
+          explaining={explaining}
+          onOpen={runId => openRun($, ctx, runId)}
+          onBack={() => closeRun($)}
+          onReport={() => reportRun($, ctx)}
+          onExplain={() => explainRun($, ctx)}
+          onCompareWith={() => compareWith($)}
+          onPick={runId => pickRun($, ctx, runId)}
+          onClearCompare={() => clearCompare($)}
+        />,
+      )
     }
     // ── end pane seam: runs tab
 

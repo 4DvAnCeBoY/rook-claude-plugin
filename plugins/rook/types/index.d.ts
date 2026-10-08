@@ -208,6 +208,26 @@ declare module 'claude-code' {
       // ── feature: runs tab (history, compare)
       history: RookRunSummary[] | null
       compare: string[]
+      /** The run the Runs tab opened, read from disk. */
+      runOpen: RookRunView | null
+      /** The two runs compareAtom holds, diffed scenario by scenario (hooks/history.ts `RunDiff`). */
+      runDiff: {
+        base: { runId: string; name?: string; counts: RookCounts; passRate?: number; credits?: number; durationMs?: number; finished: boolean }
+        head: { runId: string; name?: string; counts: RookCounts; passRate?: number; credits?: number; durationMs?: number; finished: boolean }
+        /** Fail or Unable to Verify in base, Pass in head. */
+        fixed: { id: string; title: string; base?: RookStatus; head?: RookStatus }[]
+        /** Pass in base, Fail or Unable to Verify in head. */
+        regressed: { id: string; title: string; base?: RookStatus; head?: RookStatus }[]
+        /** Judged in head only. */
+        added: { id: string; title: string; base?: RookStatus; head?: RookStatus }[]
+        /** Judged in base only. */
+        missing: { id: string; title: string; base?: RookStatus; head?: RookStatus }[]
+        /** Not Pass in both. */
+        stillFailing: { id: string; title: string; base?: RookStatus; head?: RookStatus }[]
+        /** Pass in both. */
+        stillPassing: number
+        delta: { pass: number; fail: number; unverifiable: number; passRate?: number; credits?: number }
+      } | null
       // ── end feature: runs tab
 
       // ── feature: scenarios tab (filter, select, detail, flaky, generate box)
