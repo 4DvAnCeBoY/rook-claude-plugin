@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import type { RookReadiness } from '../types'
-import { envSetLine, exploreInstruction, generatePlan, listingKey, MAX_ENTRIES, nextStep, scanRepo, sdksIn, startSteps } from '../hooks/repo'
+import { handWritten, envSetLine, exploreInstruction, generatePlan, listingKey, MAX_ENTRIES, nextStep, scanRepo, sdksIn, startSteps } from '../hooks/repo'
 import type { Io } from '../hooks/workspace'
 
 /** An in-memory repository: a file tree the scan lists and reads, and a record of what it read and listed. */
@@ -235,5 +235,15 @@ describe('repo · the guided start', () => {
     expect(nextStep(tested)).toMatchObject({ id: 'run', action: { kind: 'first-run', label: 'First run: 3 scenarios', spends: true } })
 
     expect(nextStep(startSteps({ ...base, runCount: 2, profiles: [{ id: 'http', isActive: true, isVerified: true, unset: [] }] }))).toBeUndefined()
+  })
+})
+
+describe('repo scan · an agent written without an SDK', () => {
+  test('a system prompt and tool calls make an agent; a file named agent needs one of them; plain code does not', () => {
+    expect(handWritten('src/agent.mjs', 'export const SYSTEM_PROMPT = `You are CommerceCare`\nimport { callTool } from "./tools.mjs"')).toBe(true)
+    expect(handWritten('src/bot.py', 'messages = [{"role": "system", "content": x}]\nresp = client.chat(tools=TOOLS)')).toBe(true)
+    expect(handWritten('src/agent.ts', 'const systemPrompt = load()')).toBe(true)
+    expect(handWritten('src/utils.ts', 'export const add = (a, b) => a + b')).toBe(false)
+    expect(handWritten('src/server.mjs', 'const tools = []')).toBe(false)
   })
 })

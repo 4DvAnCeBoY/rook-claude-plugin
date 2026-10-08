@@ -16,7 +16,7 @@ import type { Io } from './workspace'
 export const SKIP_DIRS: ReadonlySet<string> = new Set(['node_modules', '.git', 'dist', 'build', '.venv', 'venv', '__pycache__', '.next', '.testmuai', 'coverage', 'target'])
 
 /** Top-level folders agent code usually lives in, walked two levels down. */
-export const CODE_DIRS = ['src', 'app', 'agent', 'agents', 'lib'] as const
+export const CODE_DIRS = ['src', 'app', 'agent', 'agents', 'lib', 'mcp'] as const
 
 /** Entries looked at in all, listing included. */
 export const MAX_ENTRIES = 300
@@ -43,6 +43,18 @@ export const SDKS: readonly { label: string; code: RegExp; dep: RegExp }[] = [
 ]
 
 const CODE_FILE = /\.(py|ts|tsx|js|jsx|mjs|cjs)$/
+
+/** A hand-written agent, no SDK: a system prompt, and calls to tools. */
+const SYSTEM_PROMPT = /\b(SYSTEM_PROMPT|system_prompt|systemPrompt)\b|role:\s*["']system["']|["']role["']\s*:\s*["']system["']/
+const TOOL_CALLING = /\b(tool_calls|toolCalls|callTool|call_tool|tool_use|function_call|tools\s*[:=])/
+
+/** Signs of an agent written without an SDK; a file named like one needs only one sign. */
+export function handWritten(path: string, text: string): boolean {
+  const prompt = SYSTEM_PROMPT.test(text)
+  const tools = TOOL_CALLING.test(text)
+
+  return (prompt && tools) || (/agent/i.test(path.split('/').pop() ?? '') && (prompt || tools))
+}
 const MANIFESTS = ['package.json', 'requirements.txt', 'pyproject.toml', 'Pipfile'] as const
 const REQUIREMENTS_FILE = /^(prd|requirements)[\w.-]*\.md$/i
 const CONNECTION_NAMES = new Set(CONNECTION_FILES.filter(name => name !== 'README.md').map(name => name.toLowerCase()))
@@ -144,6 +156,8 @@ export async function scanRepo(io: Io, root?: readonly Entry[]): Promise<RookRep
 
     if (sdks.length > 0) {
       found.push({ path, kind: 'agent', what: `an agent: ${sdks.slice(0, 2).join(', ')}` })
+    } else if (handWritten(path, text)) {
+      found.push({ path, kind: 'agent', what: 'an agent: its own code, a system prompt and tools' })
     }
   }
 
