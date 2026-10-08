@@ -1961,6 +1961,10 @@ async function keepFocus($: EngineInterface): Promise<void> {
 
 const LENS_KEY = 'lens'
 
+/** Body rows the pane asks for inline: when the person opened it, and when rook did. */
+const PANE_ROWS_ASKED = 30
+const PANE_ROWS = 18
+
 /**
  * Open the pane. `focus` when the person asked for it (`/rook`, a band's or a
  * card's Open): keys go to the pane at once and Esc returns to the prompt.
@@ -1972,7 +1976,10 @@ async function openPane($: EngineInterface, opts: { focus?: boolean; tab?: RookT
     await setTab($, opts.tab)
   }
 
-  return $.ui.open({ id: PANE, title: 'rook', ...(opts.focus === true && { focus: true }) })
+  // Inline, a pane gets a third of the terminal unless it asks: the views need more to show a list and
+  // its detail. Asked for, it takes more room; opened by rook, a little more than a third. A size the
+  // person dragged the pane to still wins.
+  return $.ui.open({ id: PANE, title: 'rook', rows: opts.focus === true ? PANE_ROWS_ASKED : PANE_ROWS, ...(opts.focus === true && { focus: true }) })
 }
 
 /** The lens the person last chose, else the `lens` option. Read once per session start. */
