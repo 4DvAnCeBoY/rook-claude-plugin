@@ -145,6 +145,8 @@ export type RookTab = 'health' | 'runs' | 'scenarios' | 'setup'
 export type RookConfirm =
   | { action: 'run'; only?: string[]; label: string; credits?: number }
   | { action: 'generate'; instruction?: string; total?: number; force?: boolean; label: string; credits?: number }
+  /** Re-run one scenario `times` times in a row (flaky check). */
+  | { action: 'flaky'; id: string; times: number; label: string; credits?: number }
 
 /** One step of a generate or explore in flight: a feature being planned, a scenario being written. */
 export type RookJobLane = { id: string; label: string; phase: string; since: number }
@@ -215,6 +217,8 @@ declare module 'claude-code' {
       filter: string
       draft: string
       flaky: Record<string, RookStatus[]>
+      /** The scenario opened in the Scenarios tab. */
+      scenarioDetail: string | null
       // ── end feature: scenarios tab
 
       // ── feature: setup tab (profile wizard, sync, budget)
