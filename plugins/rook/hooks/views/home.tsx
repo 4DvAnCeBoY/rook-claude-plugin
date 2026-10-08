@@ -57,6 +57,8 @@ export type ReleaseProps = HomeCommon & {
 
 export type ChangeProps = HomeCommon & {
   lastGreen?: string
+  /** False when no run was fully green and `lastGreen` is the run before the first regression. */
+  isGreen?: boolean
   regressions: Owned[]
   changed: ChangedFile[]
   cost: Cost
@@ -367,11 +369,11 @@ export function ChangeView(props: ChangeProps) {
     <Box flexDirection="column">
       <Box key="home-verdict">
         <Text bold color={regressions.length > 0 ? 'red' : 'green'} wrap="truncate-end">
-          {regressions.length > 0 ? `✗ ${plural(regressions.length, 'regression')} since your last green` : '✓ No regressions from your change'}
+          {regressions.length > 0 ? `✗ ${plural(regressions.length, 'regression')} since ${props.isGreen === false ? 'the baseline' : 'your last green'}` : '✓ No regressions from your change'}
         </Text>
       </Box>
       <Text dimColor wrap="truncate-end">
-        {props.lastGreen !== undefined ? `last green: ${props.lastGreen}` : 'no green run yet'}
+        {props.lastGreen === undefined ? 'no green run yet' : props.isGreen === false ? `baseline: ${props.lastGreen} (no fully green run yet; the run before the first regression)` : `last green: ${props.lastGreen}`}
         {props.runLine !== undefined ? ` · latest: ${props.runLine}` : ''}
       </Text>
 

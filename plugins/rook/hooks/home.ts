@@ -236,6 +236,13 @@ export function runsOf(verdicts: readonly RookVerdictHistory[]): { runId: string
  * scenario that ran passed; without one, the newest run before the first
  * regression (a scenario going Pass → Fail).
  */
+/** Whether every scenario judged in the run passed: a real green run, not the fallback baseline. */
+export function isGreenRun(verdicts: readonly RookVerdictHistory[], runId: string): boolean {
+  const statuses = verdicts.flatMap(h => h.runs.filter(r => r.runId === runId).map(r => r.status))
+
+  return statuses.length > 0 && statuses.every(s => s === 'Pass')
+}
+
 export function lastGreenOf(verdicts: readonly RookVerdictHistory[]): string | undefined {
   const runs = runsOf(verdicts)
   const green = runs.filter(r => r.statuses.size > 0 && [...r.statuses.values()].every(s => s === 'Pass')).at(-1)
@@ -327,10 +334,16 @@ const meanOf = (values: readonly (number | undefined)[]): number | undefined => 
 
 /** Tokens and latency of the latest run against the run before it, and the scenarios that grew most. */
 export function costOf(now: readonly RookScenarioRow[], before: readonly RookScenarioRow[], top = 3): Cost {
-  const tokens = sumOf(now.map(r => metricsOf(r).tokens))
-  const tokensBefore = sumOf(before.map(r => metricsOf(r).tokens))
-  const latency = meanOf(now.map(r => r.latencyMs))
-  const latencyBefore = meanOf(before.map(r => r.latencyMs))
+  // Like for like: runs of different scope (a category run after a full matrix)
+  // would otherwise read as a swing in cost. Only scenarios judged in both count.
+  const inBoth = new Set(before.map(r => r.id))
+  const shared = now.filter(r => inBoth.has(r.id))
+  const sharedIds = new Set(shared.map(r => r.id))
+  const prior = before.filter(r => sharedIds.has(r.id))
+  const tokens = sumOf(shared.map(r => metricsOf(r).tokens))
+  const tokensBefore = sumOf(prior.map(r => metricsOf(r).tokens))
+  const latency = meanOf(shared.map(r => r.latencyMs))
+  const latencyBefore = meanOf(prior.map(r => r.latencyMs))
   const was = new Map(before.map(r => [r.id, metricsOf(r)]))
   const grew = now
     .flatMap(r => {

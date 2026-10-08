@@ -83,7 +83,7 @@ import type { ScenarioInfo as DrillScenarioInfo } from './scenarios'
 
 // ── imports: home
 import { ChangeView, ReleaseView } from './views/home'
-import { blockersReportPrompt, costOf, coverageOf, fixChangePrompt, gapsInstruction, isStaleVerdict, lastGreenOf, notYoursLine, ownedOf, readFeatures, regressionsOf, releaseOf } from './home'
+import { blockersReportPrompt, costOf, coverageOf, fixChangePrompt, gapsInstruction, isGreenRun, isStaleVerdict, lastGreenOf, notYoursLine, ownedOf, readFeatures, regressionsOf, releaseOf } from './home'
 import type { ChangedFile, HomeFeature, HomeInput, HomeRow } from './home'
 import { changedSince, runStartMs } from './changes'
 import { historyRuns } from './evidence'
@@ -3307,7 +3307,7 @@ async function homeChange($: EngineInterface, ctx: Ctx, snapshot: RookSnapshot) 
   const notYours = notYoursLine(owned)
 
   return {
-    ...(lastGreen !== undefined && { lastGreen }),
+    ...(lastGreen !== undefined && { lastGreen, isGreen: isGreenRun(input.verdicts, lastGreen) }),
     regressions,
     changed,
     cost: costOf(latest?.rows ?? [], before),

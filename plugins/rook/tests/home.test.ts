@@ -186,9 +186,9 @@ describe('home · pure', () => {
       [row('SC-1', 'Pass', { ...t(50, 10), turns: 1, latencyMs: 100 }), row('SC-2', 'Pass', { ...t(50, 10), turns: 1, latencyMs: 100 }), row('SC-3', 'Pass', { ...t(50, 0), latencyMs: 100 })],
     )
 
-    expect(cost.tokens).toEqual({ now: 250, before: 170 })
+    expect(cost.tokens).toEqual({ now: 240, before: 170 })
     expect(cost.latencyMs).toEqual({ now: 200, before: 100 })
-    expect(costLine(cost)).toBe('tokens 250 (+47%) · latency 200ms per scenario (+100%)')
+    expect(costLine(cost)).toBe('tokens 240 (+41%) · latency 200ms per scenario (+100%)')
     expect(cost.grew.map(g => g.id)).toEqual(['SC-1', 'SC-3']) // SC-2 did not grow; SC-4 has nothing to compare
     expect(grewLine(cost.grew[0]!)).toBe('SC-1 tokens 60→120 · turns 1→4 · latency 100ms→300ms')
     expect(costOf([], []).grew).toEqual([])
@@ -351,8 +351,8 @@ describe('home · My change (developer)', () => {
 
       await ui.press({ key: 'lens' })
       expect(await ui.find({ text: /My change/ })).toBeDefined()
-      expect((await ui.find({ key: 'home-verdict' }))?.text).toBe('✗ 1 regression since your last green')
-      expect(await ui.find({ text: new RegExp(`last green: ${NEW_RUN}`) })).toBeDefined()
+      expect((await ui.find({ key: 'home-verdict' }))?.text).toBe('✗ 1 regression since the baseline')
+      expect(await ui.find({ text: new RegExp(`baseline: ${NEW_RUN}`) })).toBeDefined()
 
       // the edit Claude made, the scenarios its feature covers: both stale
       expect(await ui.find({ text: /✎ src\/tools\.mjs/ })).toBeDefined()

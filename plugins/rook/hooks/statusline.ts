@@ -327,7 +327,7 @@ function freshParts(snapshot: RookSnapshot | null): StatusPart[] {
   return [
     { text: 'not set up', rank: 0 },
     ...(next === undefined ? [] : [{ text: `next: ${next}`, rank: 3 }]),
-    { text: `found ${kinds.join(', ')}`, rank: 4 },
+    { text: `found ${kinds.join(', ')}`, short: `found ${kinds.filter(k => k === 'agent' || k === 'requirements').map(k => (k === 'requirements' ? 'PRD' : k)).join(' + ') || kinds[0]}`, rank: 4 },
   ]
 }
 
