@@ -31,6 +31,9 @@ import { ScenariosTab } from './views/scenarios'
 // ── end imports: status line
 
 // ── imports: card
+import type { RenderElement, RenderInput } from 'claude-code'
+import { CARD_RUN_TOOL, CARD_TOOL, cardFacts, cardProgress, runIdOf } from './card'
+import { RunProgressRow, VerdictCard } from './views/card'
 // ── end imports: card
 
 // ── imports: ci
@@ -1741,6 +1744,73 @@ async function syncReply($: EngineInterface, ctx: Ctx): Promise<string> {
 // ══ end feature: status line ═════════════════════════════════════════════════
 
 // ══ feature: card (transcript verdict card) ══════════════════════════════════
+
+/** The run a tool result names, read from disk; undefined when it cannot be read. */
+async function cardRun($: EngineInterface, ctx: Ctx, runId: string): Promise<RookRunView | undefined> {
+  const loc = ctx.located ?? (await where($, ctx))
+
+  return loc === undefined ? undefined : readRun(ioOf($, ctx), loc.agentDir, runId, ctx.rows).catch(() => undefined)
+}
+
+/** The card's Open in pane: the Health tab, the pane open. */
+async function cardOpen($: EngineInterface): Promise<void> {
+  await setTab($, 'health')
+  await $.ui.open({ id: PANE, title: 'rook' }).catch(() => undefined)
+}
+
+/** The card's Fix with Claude: the run's failures, read afresh from disk, handed to Claude. */
+async function cardFix($: EngineInterface, ctx: Ctx, runId: string): Promise<void> {
+  const run = await cardRun($, ctx, runId)
+
+  if (run !== undefined && run.counts.fail > 0) {
+    await fixWithClaude($, ctx, run)
+  }
+}
+
+/** A finished run's tool result drawn as a card; the engine's own block where anything is missing. */
+async function cardRender($: EngineInterface, ctx: Ctx, e: RenderInput<'ToolResult'>): Promise<RenderElement | undefined> {
+  if (e.props.isErrored) {
+    return undefined
+  }
+
+  const runId = runIdOf(e.props.output)
+  const run = runId === undefined ? undefined : await cardRun($, ctx, runId)
+
+  if (runId === undefined || run === undefined || !run.finished) {
+    return undefined
+  }
+
+  const resolved = $.ui.resolve(e) as unknown as Partial<El>
+
+  if (resolved.Box === undefined || resolved.Text === undefined || resolved.Button === undefined) {
+    return undefined
+  }
+
+  return <VerdictCard el={resolved as El} card={cardFacts(run)} onOpen={() => cardOpen($)} onFix={() => cardFix($, ctx, runId)} />
+}
+
+/** The run tool's own row while Claude's run is in flight: judged so far and the lanes. */
+async function cardProgressRender($: EngineInterface, e: RenderInput<'ToolUse'>): Promise<RenderElement | undefined> {
+  if (!e.props.isRunning) {
+    return undefined
+  }
+
+  const running = await read($, runningAtom)
+  const run = (await read($, snapshotAtom))?.latest
+
+  if (running?.source !== 'tool' || run === undefined || run.finished) {
+    return undefined
+  }
+
+  await read($, tickAtom)
+  const resolved = $.ui.resolve(e) as unknown as Partial<El>
+
+  if (resolved.Box === undefined || resolved.Text === undefined) {
+    return undefined
+  }
+
+  return <RunProgressRow el={resolved as El} progress={cardProgress(run)} />
+}
 // ══ end feature: card ════════════════════════════════════════════════════════
 
 // ══ feature: ci ══════════════════════════════════════════════════════════════
@@ -2162,6 +2232,9 @@ export const register: Register = (on, options) => {
   })
 
   // ── render hooks: card
+  // The model reads the result text unchanged; these draw it differently, and hand back the engine's own row when they cannot.
+  on('ui.render', { component: 'ToolResult', props: { tool: CARD_TOOL } }, async ($, e, next) => (await cardRender($, ctx, e)) ?? next(e))
+  on('ui.render', { component: 'ToolUse', props: { tool: CARD_RUN_TOOL } }, async ($, e, next) => (await cardProgressRender($, e)) ?? next(e))
   // ── end render hooks: card
 
   // 2 · the turn's spinner: where Claude's rook run is, at any terminal width
