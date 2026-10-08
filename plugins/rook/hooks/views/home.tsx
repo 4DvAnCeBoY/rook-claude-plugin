@@ -351,7 +351,7 @@ export function ReleaseView(props: ReleaseProps) {
 
       <RunButtons {...props}>
         {release.blockers.length > 0 && <Button key="home-draft" label="Draft bug reports" variant="primary" hotkey="d" onPress={props.onDraft} />}
-        {gaps.length > 0 && <Button key="home-generate" label={`Generate for ${plural(gaps.length, 'gap')}`} hotkey="n" onPress={props.onGenerate} />}
+        {gaps.length > 0 && <Button key="home-generate" label={`Generate for ${plural(gaps.length, 'gap')}`} hotkey="i" onPress={props.onGenerate} />}
       </RunButtons>
     </Box>
   )
