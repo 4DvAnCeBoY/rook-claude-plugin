@@ -83,7 +83,7 @@ import type { ScenarioInfo as DrillScenarioInfo } from './scenarios'
 
 // ── imports: home
 import { ChangeView, ReleaseView } from './views/home'
-import { bugReportPrompt, costOf, coverageOf, fixChangePrompt, gapsInstruction, isStaleVerdict, lastGreenOf, notYoursLine, ownedOf, readFeatures, regressionsOf, releaseOf } from './home'
+import { blockersReportPrompt, costOf, coverageOf, fixChangePrompt, gapsInstruction, isStaleVerdict, lastGreenOf, notYoursLine, ownedOf, readFeatures, regressionsOf, releaseOf } from './home'
 import type { ChangedFile, HomeFeature, HomeInput, HomeRow } from './home'
 import { changedSince, runStartMs } from './changes'
 import { historyRuns } from './evidence'
@@ -3302,7 +3302,7 @@ async function homeDraft($: EngineInterface, ctx: Ctx): Promise<void> {
   const release = releaseOf(await homeInput($, ctx, snapshot))
 
   if (release.blockers.length > 0) {
-    await $.prompt.submit({ text: bugReportPrompt({ agentId: loc.agentId, agentDir: loc.agentDir, blockers: release.blockers }) })
+    await $.prompt.submit({ text: blockersReportPrompt({ agentId: loc.agentId, agentDir: loc.agentDir, blockers: release.blockers }) })
   }
 }
 

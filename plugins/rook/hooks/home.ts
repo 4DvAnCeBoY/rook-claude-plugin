@@ -189,7 +189,7 @@ function criteriaLines(row: RookScenarioRow, indent = '  '): string[] {
 }
 
 /** Draft bug reports for the blockers: grounded in each verdict, nothing invented. */
-export function bugReportPrompt(ask: { agentId: string; agentDir: string; blockers: readonly Owned[] }): string {
+export function blockersReportPrompt(ask: { agentId: string; agentDir: string; blockers: readonly Owned[] }): string {
   const reports = ask.blockers.map(b =>
     [
       `${b.id}${b.title ? ` — ${b.title}` : ''} (run ${b.runId}${b.isAdversarial ? ', adversarial' : ''}${b.row.compromised ? ', compromised' : ''})`,

@@ -3,7 +3,7 @@ import type { Engine } from 'claude-code/testing'
 
 import type { RookCluster, RookRunView, RookScenarioRow, RookStatus, RookVerdictHistory } from '../types'
 import {
-  bugReportPrompt,
+  blockersReportPrompt,
   costLine,
   costOf,
   coverageOf,
@@ -136,7 +136,7 @@ describe('home · pure', () => {
 
   test('bug reports: each blocker’s criteria, history and evidence files; only what the evidence shows', () => {
     const [blocker] = ownedOf({ rows: [row('SC-1', 'Fail', { compromised: true })], verdicts: [history('SC-1', ['Pass', 'Fail'])], scenarios: [{ id: 'SC-1', class: 'adversarial' }] })
-    const text = bugReportPrompt({ agentId: 'cc', agentDir: 'A', blockers: [blocker!] })
+    const text = blockersReportPrompt({ agentId: 'cc', agentDir: 'A', blockers: [blocker!] })
 
     expect(text).toContain('Draft one bug report per scenario below for agent cc: a scenario rook judged an agent bug.')
     expect(text).toContain(`SC-1 — title SC-1 (run ${R4}, adversarial, compromised)`)
