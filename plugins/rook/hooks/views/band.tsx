@@ -2,8 +2,8 @@ import type { RookStale } from '../../types'
 import { credits, perScenario, staleLine, tickedOf } from '../format'
 import type { El } from './kit'
 
-/** Cells the band's fixed parts take: `◆ rook`, `[ Re-test N ]`, Details, `[ Dismiss ]` and the gaps. */
-const FIXED = 44
+/** Cells the band's fixed parts take: `◆ rook`, `[ Re-test N ]`, `i: Details` (a plain Button with a hotkey), `[ Dismiss ]` and the gaps. */
+const FIXED = 47
 /** The least of the summary worth keeping beside inline toggles. */
 const SUMMARY_MIN = 40
 /** Below this, the summary is cut to its counts. */
@@ -50,9 +50,9 @@ export function RetestBand(props: {
           <Text wrap="truncate-end">{summary}</Text>
         </Box>
         {isInline ? stale.scenarios.map(toggle) : null}
-        <Button key="retest" label={`Re-test ${ticked.length}`} variant="primary" dimColor={ticked.length === 0} onPress={props.onRetest} />
-        <Button key="details" plain label={isOpen ? 'Hide' : 'Details'} onPress={props.onDetails} />
-        <Button key="dismiss" label="Dismiss" role="dismiss" onPress={props.onDismiss} />
+        <Button key="retest" label={`Re-test ${ticked.length}`} variant="primary" hotkey="a" dimColor={ticked.length === 0} onPress={props.onRetest} />
+        <Button key="details" plain label={isOpen ? 'Hide' : 'Details'} hotkey="i" onPress={props.onDetails} />
+        <Button key="dismiss" label="Dismiss" hotkey="z" role="dismiss" onPress={props.onDismiss} />
       </Box>
       {isOpen ? (
         <Box flexDirection="column">

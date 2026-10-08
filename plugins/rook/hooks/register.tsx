@@ -84,6 +84,12 @@ import type { RookLens } from '../types'
 // ── end imports: live
 
 // ── imports: keys
+import { listingKey, nextStep, scanRepo, START_PROMPTS, startSteps } from './repo'
+import type { StartAction, StartFacts } from './repo'
+import { FreshStart, KeysHint, NextStep } from './views/fresh'
+import { LENS_LABEL } from './views/tabs'
+import type { SettingRow } from './views/setup'
+import type { RookRepoFound } from '../types'
 // ── end imports: keys
 import {
   agentsText,
@@ -358,6 +364,8 @@ type Ctx = {
   lensDefault: RookLens
   /** The runs the verdict history was last read from, to skip re-reading when nothing changed. */
   verdictSignature?: string
+  /** feature: keys — the fresh-repo scan and the settings /config would not keep. */
+  keys?: KeysCache
 }
 
 /** Claude Code labels a plugin's toast with its name: drop rook's own prefix so it reads once. */
@@ -568,8 +576,9 @@ async function poll($: EngineInterface, ctx: Ctx): Promise<void> {
     const before = await read($, snapshotAtom)
 
     if (loc === undefined) {
-      // No agent to read: the snapshot carries only the checklist.
-      const bare: RookSnapshot = { current: [], neverRun: 0, checkedAt: await $.clock.now(), readiness }
+      // No agent to read: the snapshot carries only the checklist, and what the repository holds that rook could start from.
+      const repoFound = await repoFoundNow($, ctx)
+      const bare: RookSnapshot = { current: [], neverRun: 0, checkedAt: await $.clock.now(), readiness, repoFound }
 
       if (JSON.stringify({ ...before, checkedAt: 0 }) !== JSON.stringify({ ...bare, checkedAt: 0 })) {
         await update($, snapshotAtom, () => bare)
@@ -874,7 +883,7 @@ async function toolRun($: EngineInterface, ctx: Ctx, request: RunRequest, signal
   // Claude asked, not the person: the pane seats only where there is room for
   // an unasked one. The spinner carries the progress everywhere else.
   if (ctx.paneMode !== 'off') {
-    void $.ui.open({ id: PANE, title: 'rook' }).catch(() => undefined)
+    void openPane($).catch(() => undefined)
   }
 
   try {
@@ -1968,6 +1977,8 @@ async function confirmNow($: EngineInterface, ctx: Ctx): Promise<void> {
     $.ui.toast(toastText(await flakyStart($, ctx, confirm.id, confirm.times, 'pane')))
   } else if (confirm?.action === 'profile-test') {
     await paneProfileTest($, ctx, confirm.profile)
+  } else if (confirm?.action === 'explore') {
+    exploreConfirmed($, ctx, confirm.instruction)
   }
 }
 
@@ -2769,6 +2780,8 @@ async function paneProfileTest($: EngineInterface, ctx: Ctx, profile: string | u
     const answer = await profileReply($, ctx, request).catch(error => ({ deny: `rook profile test failed: ${String(error)}` }))
 
     $.ui.toast(toastText(clip('deny' in answer ? answer.deny : answer.result, 300)))
+    // The tab reads verified from state.json while drawing: draw it again now that rook wrote it.
+    $.ui.invalidate('ui.render')
   })
 }
 
@@ -2817,6 +2830,8 @@ async function setupPanel($: EngineInterface, ctx: Ctx, canAct: boolean): Promis
     budgetLine: budgetText(await read($, budgetAtom), await read($, balanceAtom)),
     sync: await read($, syncAtom),
     canAct,
+    settings: settingRows(ctx, await read($, lensAtom)),
+    hasBudget: (await read($, budgetAtom)) !== null,
   }
 }
 
@@ -2867,10 +2882,9 @@ async function cardRun($: EngineInterface, ctx: Ctx, runId: string): Promise<Roo
   return loc === undefined ? undefined : readRun(ioOf($, ctx), loc.agentDir, runId, ctx.rows).catch(() => undefined)
 }
 
-/** The card's Open in pane: the Health tab, the pane open. */
+/** The card's Open in pane: the Health tab, the pane open with the keys (the person asked for it). */
 async function cardOpen($: EngineInterface): Promise<void> {
-  await setTab($, 'health')
-  await $.ui.open({ id: PANE, title: 'rook' }).catch(() => undefined)
+  await openPane($, { focus: true, tab: 'health' }).catch(() => undefined)
 }
 
 /** The card's Fix with Claude: the run's failures, read afresh from disk, handed to Claude. */
@@ -3006,6 +3020,173 @@ async function ciAnswer($: EngineInterface, ctx: Ctx, request: CiRequest): Promi
 // ══ end feature: live ════════════════════════════════════════════════════════
 
 // ══ feature: keys (focus, hotkeys, fresh repo, setup toggles) ════════════════
+
+type KeysCache = {
+  /** The last scan of a repository with no agent, keyed by its top-level listing. */
+  repo?: { key: string; found: RookRepoFound[] }
+  /** Settings /config refused to write: changed for this session only. */
+  sessionOnly?: Set<SettingRow['id']>
+}
+
+/** What the repository holds that rook could start from: scanned again only when its top level changes. Called by poll with no agent. */
+async function repoFoundNow($: EngineInterface, ctx: Ctx): Promise<RookRepoFound[]> {
+  const io = ioOf($, ctx)
+  const top = await io.list('.')
+  const key = listingKey(top)
+  const cache = (ctx.keys ??= {})
+
+  if (cache.repo?.key !== key) {
+    cache.repo = { key, found: await scanRepo(io, top).catch(() => []) }
+  }
+
+  return cache.repo.found
+}
+
+/** This session's folder name: what a project created from the guided start is called. */
+function folderOf(ctx: Ctx): string {
+  return ctx.cwd.split('/').filter(Boolean).at(-1) ?? ''
+}
+
+/**
+ * An agent with no runs here (a workspace pulled from git): every step left
+ * before the first run, the next one with its command and its button. Null
+ * once it has run. Read while drawing; writes nothing.
+ */
+async function firstRunLead($: EngineInterface, ctx: Ctx, el: El, snapshot: RookSnapshot, lens: RookLens, canAct: boolean) {
+  if ((snapshot.runCount ?? 0) > 0 || snapshot.latest !== undefined) {
+    return null
+  }
+
+  const panel = await setupPanel($, ctx, canAct)
+  const facts: StartFacts = {
+    readiness: snapshot.readiness,
+    found: ctx.keys?.repo?.found ?? [],
+    lens,
+    folder: folderOf(ctx),
+    profiles: (panel?.profiles ?? []).map(profile => ({
+      id: profile.id,
+      isActive: profile.isActive,
+      isVerified: profile.isVerified,
+      unset: profile.variables.filter(variable => !variable.isSet).map(variable => variable.name),
+    })),
+    ...(panel?.wizard?.connectionFile !== undefined && { connectionFile: panel.wizard.connectionFile }),
+    runCount: snapshot.runCount ?? 0,
+    scenarios: snapshot.current.length + snapshot.neverRun,
+  }
+  const steps = startSteps(facts)
+
+  return nextStep(steps) === undefined ? null : (
+    <NextStep el={el} steps={steps} isListed title="Before the first run" canAct={canAct} onAction={action => startAction($, ctx, action)} />
+  )
+}
+
+/** A guided-start button: the setup tool, command or prompt that takes the step. Credit-spending steps wait behind the confirm bar. */
+async function startAction($: EngineInterface, ctx: Ctx, action: StartAction): Promise<void> {
+  switch (action.kind) {
+    case 'recheck':
+      return recheck($, ctx)
+    case 'create-project':
+      $.ui.toast(toastText(clip(await projectReply($, ctx, { action: 'create', name: action.arg ?? folderOf(ctx) }), 300)))
+      return
+    case 'pick-project':
+    case 'pick-agent':
+    case 'connection':
+      await $.prompt.submit({ text: START_PROMPTS[action.kind] })
+      return
+    case 'explore':
+      return askConfirm($, {
+        action: 'explore',
+        label: "Explore this repository: rook reads the code and writes the agent's features",
+        ...(action.arg !== undefined && { instruction: action.arg }),
+      })
+    case 'generate':
+      return askConfirm($, { action: 'generate', label: action.label, ...(action.arg !== undefined && { instruction: action.arg }) })
+    case 'add-profile':
+    case 'fill-env': {
+      // Only the person can run these (they ask for or hold secrets): the line goes in their prompt, not to rook.
+      const filled = await $.prompt.fill({ text: action.arg ?? '' }).catch(() => undefined)
+
+      $.ui.toast(toastText(filled?.isFilled === false ? `rook: type ${action.arg ?? ''}` : 'rook: the command is in the prompt. Esc to get there, then Enter.'))
+      return
+    }
+    case 'use-profile':
+      return paneUseProfile($, ctx, action.arg ?? '')
+    case 'test-profile':
+      return askProfileTest($, action.arg ?? '')
+    case 'first-run':
+      return askConfirm($, { action: 'run', label: action.label })
+  }
+}
+
+/** The confirmed explore from the guided start: in the background, as /rook explore runs it. Called from confirmNow. */
+function exploreConfirmed($: EngineInterface, ctx: Ctx, instruction: string | undefined): void {
+  $.ui.toast(toastText('rook: exploring this repository in the background (minutes, spends credits). A toast says what it found.'))
+  $.clock.after(0, async () =>
+    $.ui.toast(
+      toastText(clip(await exploreRun($, ctx, instruction === undefined ? {} : { instruction }, undefined, 'background').catch(error => `rook explore failed: ${String(error)}`), 300)),
+    ),
+  )
+}
+
+const PANE_MODES = ['auto', 'command', 'off'] as const
+const onOff = (value: boolean): string => (value ? 'on' : 'off')
+
+/** The Setup tab's settings: the options that change the pane and the session, each with its key and where a change is kept. */
+function settingRows(ctx: Ctx, lens: RookLens): SettingRow[] {
+  const scope = (id: SettingRow['id']): SettingRow['scope'] => (ctx.keys?.sessionOnly?.has(id) ? 'this session' : 'kept')
+
+  return [
+    { id: 'pane', label: 'Pane opens', value: ctx.paneMode === 'auto' ? 'auto (at session start)' : ctx.paneMode === 'command' ? 'on /rook only' : 'off', scope: scope('pane'), hotkey: '6' },
+    { id: 'retestBand', label: 'Re-test band', value: onOff(ctx.isRetestBand), scope: scope('retestBand'), hotkey: '7' },
+    { id: 'failureContext', label: 'Failures as context', value: onOff(ctx.isFailureContext), scope: scope('failureContext'), hotkey: '8' },
+    // A guard against writes to production is turned off deliberately: Enter on it, never a stray key.
+    { id: 'prodGuard', label: 'Production guard', value: onOff(ctx.isProdGuard), scope: scope('prodGuard'), note: 'no key: Enter on it to change' },
+    { id: 'lens', label: 'Pane view', value: LENS_LABEL[lens], scope: 'kept', note: 'l switches it' },
+  ]
+}
+
+/**
+ * A Setup tab setting: the lens through the shared toggle; the rest written
+ * to the plugin's own /config row (`rook.<field>`), and applied to this load
+ * at once. When /config refuses, the change holds for this session only, and
+ * the row says so.
+ */
+async function toggleSetting($: EngineInterface, ctx: Ctx, id: SettingRow['id']): Promise<void> {
+  if (id === 'lens') {
+    return toggleLens($)
+  }
+
+  let value: string | boolean
+
+  if (id === 'pane') {
+    value = PANE_MODES[(PANE_MODES.indexOf(ctx.paneMode as (typeof PANE_MODES)[number]) + 1) % PANE_MODES.length]!
+    ctx.paneMode = value
+  } else if (id === 'retestBand') {
+    value = ctx.isRetestBand = !ctx.isRetestBand
+  } else if (id === 'failureContext') {
+    value = ctx.isFailureContext = !ctx.isFailureContext
+  } else {
+    value = ctx.isProdGuard = !ctx.isProdGuard
+  }
+
+  const set = await $.config.set({ key: `rook.${id}`, value }).catch(error => ({ deny: String(error) }))
+  const sessionOnly = ((ctx.keys ??= {}).sessionOnly ??= new Set())
+
+  if (set.deny === undefined) {
+    sessionOnly.delete(id)
+  } else {
+    sessionOnly.add(id)
+    $.ui.toast(toastText(`rook: changed for this session only; /config did not keep it (${clip(set.deny, 120)}).`))
+  }
+
+  $.ui.invalidate('ui.render')
+}
+
+/** The Setup tab's budget box and Budget off: /rook budget, its answer as a toast. */
+async function paneBudget($: EngineInterface, ctx: Ctx, args: string[]): Promise<void> {
+  $.ui.toast(toastText(await budgetReply($, ctx, args)))
+}
+
 // ══ end feature: keys ════════════════════════════════════════════════════════
 
 const APPROVALS_NOTE =
@@ -3554,17 +3735,31 @@ export const register: Register = (on, options) => {
       </Box>
     )
 
-    // No agent to show: the setup checklist, the next step highlighted.
+    // No agent to show: what the repository holds, the setup checklist, the next step's button.
     if (snapshot === null || snapshot.agentId === undefined) {
       return (
         <Box flexDirection="column">
-          <SetupTab el={el} readiness={readiness} onRecheck={() => recheck($, ctx)} />
+          <FreshStart
+            el={el}
+            hasWorkspace={readiness?.hasWorkspace ?? true}
+            found={snapshot?.repoFound}
+            steps={startSteps({ readiness, found: snapshot?.repoFound ?? [], lens, folder: folderOf(ctx) })}
+            canAct={running === null && job === null && confirm === null}
+            onAction={action => startAction($, ctx, action)}
+            checklist={<SetupTab el={el} readiness={readiness} onRecheck={() => recheck($, ctx)} />}
+          />
           {failedBefore}
           {jobView}
           {confirmView}
+          {e.props.isFocused && <KeysHint el={el} />}
         </Box>
       )
     }
+
+    // ── pane seam: keys
+    // An agent never run here (pulled from git): the one missing piece and its button lead the Release and Setup tabs.
+    const lead = tab === 'health' || tab === 'setup' ? await firstRunLead($, ctx, el, snapshot, lens, running === null && explaining === null && confirm === null) : null
+    // ── end pane seam: keys
 
     const header = (
       <Text bold wrap="truncate-end">
@@ -3580,7 +3775,9 @@ export const register: Register = (on, options) => {
         {failedBefore}
         {jobView}
         {confirmView}
+        {lead}
         {body as never}
+        {e.props.isFocused && <KeysHint el={el} />}
       </Box>
     )
 
@@ -3695,6 +3892,9 @@ export const register: Register = (on, options) => {
             onSync: () => paneSync($, ctx),
             onCheckSync: () => paneCheckSync($, ctx),
             onRefresh: () => $.ui.invalidate('ui.render'),
+            onSetting: id => toggleSetting($, ctx, id),
+            onBudget: text => paneBudget($, ctx, [text.trim()]),
+            onBudgetOff: () => paneBudget($, ctx, ['off']),
           }}
         />,
       )

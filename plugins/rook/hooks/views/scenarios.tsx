@@ -39,6 +39,12 @@ export type ScenariosTabProps = {
 
 const MAX_ROWS = 60
 
+/** Each filter's key in the pane: digits past the tabs' 1-5, then j. */
+export const FILTER_KEYS: Record<string, string> = { all: '0', failing: '6', unverifiable: '7', never: '8', functional: '9', adversarial: 'j' }
+
+/** The tab's own actions' keys: r runs (as Run all does elsewhere), the rest from the letters no other feature takes. */
+export const SCENARIO_KEYS = { selectAll: 'h', clear: 'z', runSelected: 'r', exclude: 'q', include: 'u', generate: 'i' } as const
+
 const mark = (status: RookStatus | undefined): { icon: string; color?: string } =>
   status === 'Pass' ? { icon: '✓', color: 'green' } : status === 'Fail' ? { icon: '✗', color: 'red' } : status === 'Unable to Verify' ? { icon: '?', color: 'yellow' } : { icon: '·' }
 
@@ -119,10 +125,10 @@ export function ScenariosTab(props: ScenariosTabProps) {
         {FILTERS.map(f =>
           f.id === props.filter ? (
             <Text key={`filter-${f.id}`} bold underline>
-              {f.label}
+              {FILTER_KEYS[f.id]}: {f.label}
             </Text>
           ) : (
-            <Button key={`filter-${f.id}`} plain label={f.label} onPress={() => props.onFilter(f.id)} />
+            <Button key={`filter-${f.id}`} plain label={f.label} hotkey={FILTER_KEYS[f.id]} onPress={() => props.onFilter(f.id)} />
           ),
         )}
       </Box>
@@ -154,13 +160,23 @@ export function ScenariosTab(props: ScenariosTabProps) {
       })}
       {rows.length > MAX_ROWS && <Text dimColor>… {rows.length - MAX_ROWS} more: narrow the filter.</Text>}
       <Box flexDirection="row" gap={1}>
-        {rows.length > 0 && <Button key="select-all" label="Select all shown" onPress={props.onSelectAll} />}
-        {selected.length > 0 && <Button key="select-clear" label="Clear" onPress={props.onClear} />}
-        {props.canRun && selected.length > 0 && (
-          <Button key="run-selected" label={`Run selected (${selected.length})${credits}`} variant="primary" onPress={props.onRunSelected} />
+        {/* The focus ring starts on Select all, on Run selected once something is ticked. */}
+        {rows.length > 0 && (
+          <Button key="select-all" label="Select all shown" hotkey={SCENARIO_KEYS.selectAll} {...(selected.length === 0 && { autoFocus: true as const })} onPress={props.onSelectAll} />
         )}
-        {selected.length > 0 && <Button key="exclude-selected" label="Exclude selected" onPress={() => props.onCurate('exclude')} />}
-        {selected.length > 0 && <Button key="include-selected" label="Include selected" onPress={() => props.onCurate('include')} />}
+        {selected.length > 0 && <Button key="select-clear" label="Clear" hotkey={SCENARIO_KEYS.clear} onPress={props.onClear} />}
+        {props.canRun && selected.length > 0 && (
+          <Button
+            key="run-selected"
+            label={`Run selected (${selected.length})${credits}`}
+            variant="primary"
+            hotkey={SCENARIO_KEYS.runSelected}
+            autoFocus
+            onPress={props.onRunSelected}
+          />
+        )}
+        {selected.length > 0 && <Button key="exclude-selected" label="Exclude selected" hotkey={SCENARIO_KEYS.exclude} onPress={() => props.onCurate('exclude')} />}
+        {selected.length > 0 && <Button key="include-selected" label="Include selected" hotkey={SCENARIO_KEYS.include} onPress={() => props.onCurate('include')} />}
       </Box>
       <Text bold>Generate</Text>
       <Box flexDirection="row" gap={1}>
@@ -174,7 +190,7 @@ export function ScenariosTab(props: ScenariosTabProps) {
             onSubmit={text => props.onGenerate(text)}
           />
         )}
-        <Button key="generate" label="Generate" onPress={() => props.onGenerate()} />
+        <Button key="generate" label="Generate" hotkey={SCENARIO_KEYS.generate} onPress={() => props.onGenerate()} />
       </Box>
     </Box>
   )

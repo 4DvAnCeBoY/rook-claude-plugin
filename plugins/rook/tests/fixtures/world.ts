@@ -10,6 +10,8 @@ import { CWD, HOME } from './workspace'
 export type World = {
   files: Map<string, string>
   opened: string[]
+  /** Every `$.ui.open`, with whether it asked for the keyboard. */
+  opens: { id: string; focus?: boolean }[]
   toasts: string[]
   statuses: (string | undefined)[]
   appended: string[]
@@ -49,6 +51,7 @@ export function worldOf(on: On, files: Readonly<Record<string, string>>, env: Re
   const world: World = {
     files: new Map(Object.entries(files)),
     opened: [],
+    opens: [],
     toasts: [],
     statuses: [],
     appended: [],
@@ -77,12 +80,14 @@ export function worldOf(on: On, files: Readonly<Record<string, string>>, env: Re
   })
 
   on('fs.list', ($, e) => {
-    const dir = relOf(e.path ?? '')
+    const dir = e.path === CWD || e.path === `${CWD}/` ? '.' : relOf(e.path ?? '')
     const names = new Map<string, 'file' | 'dir'>()
+    // `.`: the repository's top level, everything not under an absolute path
+    const prefix = dir === '.' ? '' : `${dir}/`
 
     for (const file of world.files.keys()) {
-      if (file.startsWith(`${dir}/`)) {
-        const rest = file.slice(dir.length + 1)
+      if (file.startsWith(prefix) && !(prefix === '' && file.startsWith('/'))) {
+        const rest = file.slice(prefix.length)
         names.set(rest.split('/')[0] ?? '', rest.includes('/') ? 'dir' : 'file')
       }
     }
@@ -168,6 +173,7 @@ export function worldOf(on: On, files: Readonly<Record<string, string>>, env: Re
 
   on('ui.open', ($, e) => {
     world.opened.push(e.id)
+    world.opens.push({ id: e.id, ...(e.focus !== undefined && { focus: e.focus }) })
 
     return { value: { isPlaced: true } } as never
   })

@@ -252,6 +252,8 @@ export type RookConfirm =
   /** Re-run one scenario `times` times in a row (flaky check). */
   | { action: 'flaky'; id: string; times: number; label: string; credits?: number }
   | { action: 'profile-test'; profile?: string; label: string; credits?: number }
+  /** `rook explore .` from the guided start (feature: keys): reads the code, writes the agent's features. */
+  | { action: 'explore'; instruction?: string; label: string; credits?: number }
 
 /** One step of a generate or explore in flight: a feature being planned, a scenario being written. */
 export type RookJobLane = { id: string; label: string; phase: string; since: number; planned?: number; done?: number }
