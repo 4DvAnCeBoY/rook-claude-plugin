@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { criteriaOf, historyRuns, phasesOf, readEvidence, verdictHistory } from '../hooks/evidence'
+import { changedSince, lastPassRun, runStartMs, verdictsBefore } from '../hooks/changes'
 import { isTrustedPass, ownerOf, trustedRate } from '../hooks/owner'
 import { rowOf } from '../hooks/workspace'
 import type { Io } from '../hooks/workspace'
@@ -170,5 +171,23 @@ describe('owner · who acts on a verdict', () => {
     expect(ownerOf({ row: { ...pass, compliance: 67 } }).why).toContain('compliance is 67%')
     expect(isTrustedPass(pass)).toBe(true)
     expect(trustedRate([pass, { ...pass, weakPasses: ['C1'] }, fail])).toBe(1 / 3)
+  })
+})
+
+describe('changes · what changed since a scenario last passed', () => {
+  const history = [{ id: 'SC-004', runs: [{ runId: '2026-10-08T09-15-00Z', status: 'Pass' as const }, { runId: '2026-10-08T11-42-00Z', status: 'Fail' as const }] }]
+
+  test('the last pass, the verdicts before a run, and files modified after it', () => {
+    expect(lastPassRun(history, 'SC-004')).toBe('2026-10-08T09-15-00Z')
+    expect(verdictsBefore(history, 'SC-004', '2026-10-08T11-42-00Z')).toEqual(['Pass'])
+    const since = runStartMs('2026-10-08T09-15-00Z')!
+    const stamps = new Map([
+      ['src/tools/refund.mjs', since + 60_000],
+      ['src/tools/fx.mjs', since - 60_000],
+      ['prompts/system.md', since + 120_000],
+    ])
+
+    expect(changedSince(stamps, since).map(c => c.path)).toEqual(['prompts/system.md', 'src/tools/refund.mjs'])
+    expect(runStartMs('2026-10-08T09-15-00Z-2')).toBe(since)
   })
 })

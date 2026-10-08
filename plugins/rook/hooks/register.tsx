@@ -1905,6 +1905,11 @@ async function openDetail($: EngineInterface, ctx: Ctx, runId: string, id: strin
   }
 }
 
+/** The agent's tracked source files and their modification times as of the last poll (hooks/changes.ts `changedSince`). */
+function sourceStampsNow(ctx: Ctx): ReadonlyMap<string, number> | undefined {
+  return ctx.sourceStamps !== undefined && ctx.sourceStamps.agentDir === ctx.located?.agentDir ? ctx.sourceStamps.stamps : undefined
+}
+
 async function closeDetail($: EngineInterface): Promise<void> {
   await update($, detailAtom, () => null)
   await update($, evidenceAtom, () => null)
