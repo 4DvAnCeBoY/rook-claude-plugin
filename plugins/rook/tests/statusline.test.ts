@@ -372,10 +372,10 @@ describe('status line · states by priority', () => {
     })
     const running = { startedAt: NOW - 60_000, label: 'all', source: 'pane' as const }
 
-    expect(composeStatus(input({ snapshot: snap(inflight), running, now: NOW }))).toBe('◐ pane 2/7 ✗1 · SC-006 execute 12s · ETA ~3m')
-    expect(composeStatus(input({ snapshot: snap(inflight), running: { ...running, source: 'tool' }, now: NOW }))).toContain('◐ claude 2/7')
+    expect(composeStatus(input({ snapshot: snap(inflight), running, now: NOW }))).toBe('◐ 2/7 ✗1 · SC-006 execute 12s · ETA ~3m')
+    expect(composeStatus(input({ snapshot: snap(inflight), running: { ...running, source: 'tool' }, now: NOW }))).toContain('◐ Claude 2/7')
     // started, nothing on disk yet
-    expect(composeStatus(input({ snapshot: snap(run()), running, now: NOW }))).toBe('◐ pane starting')
+    expect(composeStatus(input({ snapshot: snap(run()), running, now: NOW }))).toBe('◐ starting')
   })
 
   test('a setup blocker wins over a run that just landed', () => {

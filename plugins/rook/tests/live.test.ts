@@ -119,8 +119,8 @@ describe('live · stale verdicts and rows', () => {
     const r = run({ done: 2, counts: { pass: 1, fail: 1, unverifiable: 0 }, lanes: [{ id: 'SC-009', title: 't', phase: 'judging', since: 0 }] })
     const running = { startedAt: 10_000, label: 'all', source: 'pane' as const }
 
-    expect(liveHeadline({ run: r, running, isOwn: true, now: 74_000, eta: 90_000 })).toBe('◐ pane 2/4 · 1m04s · ETA ~2m · 1 failing')
-    expect(liveHeadline({ running, isOwn: true, now: 12_000 })).toBe('◐ pane starting all · 2s')
+    expect(liveHeadline({ run: r, running, isOwn: true, now: 74_000, eta: 90_000 })).toBe('◐ 2/4 · 1m04s · ETA ~2m · 1 failing')
+    expect(liveHeadline({ running, isOwn: true, now: 12_000 })).toBe('◐ starting all · 2s')
     expect(runBandText(r, null, 0)).toBe('◐ rook · 2/4 · SC-009 judging · 1 failing')
     expect(freshnessText(true, 0, 0)).toBe('● live')
     expect(freshnessText(false, 1_000, 13_000)).toBe('updated <1m ago')
@@ -185,7 +185,7 @@ describe('live · in a session', () => {
 
     expect((await band.find({ key: 'run-band' }))?.text).toContain('◐ rook · starting all runnable scenarios')
     expect(await band.find({ key: 'band-cancel' })).toBeDefined()
-    expect(world.statuses.at(-1)).toBe('◐ /rook starting')
+    expect(world.statuses.at(-1)).toBe('◐ starting')
 
     await band.press({ key: 'band-cancel' })
     await advancing

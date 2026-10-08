@@ -3574,7 +3574,7 @@ function folderOf(ctx: Ctx): string {
  * once it has run. Read while drawing; writes nothing.
  */
 async function firstRunLead($: EngineInterface, ctx: Ctx, el: El, snapshot: RookSnapshot, lens: RookLens, canAct: boolean) {
-  if ((snapshot.runCount ?? 0) > 0 || snapshot.latest !== undefined) {
+  if ((snapshot.runCount ?? 0) > 0 || snapshot.latest !== undefined || (await read($, runningAtom)) !== null) {
     return null
   }
 
@@ -4530,8 +4530,8 @@ export const register: Register = (on, options) => {
 
     let body: unknown
 
-    if (run === undefined && (snapshot.runCount ?? 0) === 0) {
-      // Nothing judged yet: no release call to make, no change to measure.
+    if ((run === undefined && (snapshot.runCount ?? 0) === 0) || (run !== undefined && !run.finished && ((await read($, historyAtom))?.length ?? 0) === 0)) {
+      // Nothing finished yet (the first run is in flight above): no release call to make, no change to measure.
       body = null
     } else if (lens === 'dev') {
       const change = await homeChange($, ctx, snapshot)

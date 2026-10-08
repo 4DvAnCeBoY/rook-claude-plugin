@@ -322,10 +322,11 @@ function freshParts(snapshot: RookSnapshot | null): StatusPart[] {
 function runningParts(input: StatusInput): StatusPart[] {
   const { snapshot, running, live, now, trend } = input
   const run = snapshot?.latest
-  const source = { text: sourceText(running, run !== undefined && isOwnRun(live ?? null, run.runId)), rank: 6, glue: ' ' }
+  const said = sourceText(running, run !== undefined && isOwnRun(live ?? null, run.runId))
+  const source: StatusPart[] = said === '' ? [] : [{ text: said, rank: 6, glue: ' ' }]
 
   if (run === undefined || run.finished) {
-    return [{ text: '◐', rank: 0 }, source, { text: 'starting', rank: 0, glue: ' ' }]
+    return [{ text: '◐', rank: 0 }, ...source, { text: 'starting', rank: 0, glue: ' ' }]
   }
 
   const doing = doingText(run, now)
@@ -333,7 +334,7 @@ function runningParts(input: StatusInput): StatusPart[] {
 
   return [
     { text: '◐', rank: 0 },
-    source,
+    ...source,
     { text: `${run.done}/${run.planned}`, rank: 0, glue: ' ' },
     ...(run.counts.fail > 0 ? [{ text: `✗${run.counts.fail}`, rank: 0, glue: ' ' }] : []),
     ...(doing === undefined ? [] : [{ text: doing, rank: 4 }]),

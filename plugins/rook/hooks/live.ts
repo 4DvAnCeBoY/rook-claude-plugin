@@ -141,11 +141,12 @@ export function isStaleIn(stale: RookStale | null, id: string, runId: string): b
 
 /** Who started a run, in a word: the status line's and the pane's `[source]`. */
 export function sourceText(running: RookRunning | null, isOwn: boolean): string {
+  // The person's own run needs no label; Claude's and another terminal's or CI's do.
   if (running === null) {
-    return isOwn ? 'here' : 'elsewhere'
+    return isOwn ? '' : 'elsewhere'
   }
 
-  return running.source === 'tool' ? 'claude' : running.source === 'pane' ? 'pane' : '/rook'
+  return running.source === 'tool' ? 'Claude' : ''
 }
 
 /** When the run started, ms since epoch: this session's own start, else its id or created time. */
@@ -185,7 +186,7 @@ export function etaShort(ms: number): string {
   return minutes < 60 ? `ETA ~${minutes}m` : `ETA ~${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, '0')}m`
 }
 
-/** The pane's first live line: `◐ pane 3/12 · 1m04s · ETA ~4m · 2 failing`. */
+/** The pane's first live line: `◐ 3/12 · 1m04s · ETA ~4m · 2 failing`, `◐ elsewhere 3/12 …` for a run from another terminal or CI. */
 export function liveHeadline(opts: { run?: RookRunView; running: RookRunning | null; isOwn: boolean; now: number; eta?: number }): string {
   const { run, running, now } = opts
   const source = sourceText(running, opts.isOwn)
@@ -193,11 +194,11 @@ export function liveHeadline(opts: { run?: RookRunView; running: RookRunning | n
   const took = started === undefined || now < started ? undefined : elapsed(now - started)
 
   if (run === undefined || run.finished) {
-    return ['◐ ' + source + ' starting' + (running === null ? '' : ` ${running.label}`), took].filter(Boolean).join(' · ')
+    return [['◐', source, 'starting', running === null ? '' : running.label].filter(Boolean).join(' '), took].filter(Boolean).join(' · ')
   }
 
   return [
-    `◐ ${source} ${run.done}/${run.planned}`,
+    ['◐', source, `${run.done}/${run.planned}`].filter(Boolean).join(' '),
     took,
     opts.eta === undefined ? undefined : etaShort(opts.eta),
     run.counts.fail > 0 ? `${run.counts.fail} failing` : undefined,
