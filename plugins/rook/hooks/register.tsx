@@ -85,7 +85,7 @@ import type { ScenarioInfo as DrillScenarioInfo } from './scenarios'
 import { ChangeView, ReleaseView } from './views/home'
 import { blockersReportPrompt, costOf, coverageOf, fixChangePrompt, gapsInstruction, isGreenRun, isStaleVerdict, lastGreenOf, notYoursLine, ownedOf, readFeatures, regressionsOf, releaseOf } from './home'
 import type { ChangedFile, HomeFeature, HomeInput, HomeRow } from './home'
-import { changedSince, runStartMs } from './changes'
+import { changedSince, runStartMs, verdictsBefore } from './changes'
 import { historyRuns } from './evidence'
 // ── end imports: home
 
@@ -3474,9 +3474,18 @@ async function trendRunsNow($: EngineInterface, ctx: Ctx): Promise<TrendRun[]> {
 async function refreshRunVersus($: EngineInterface, ctx: Ctx, run: RookRunView): Promise<void> {
   const loc = ctx.located ?? (await where($, ctx))
   const previous = previousRunId(await read($, historyAtom), run.runId)
-  const before = loc === undefined || previous === undefined ? undefined : await readRun(ioOf($, ctx), loc.agentDir, previous, ctx.rows).catch(() => undefined)
+  const verdicts = await read($, verdictsAtom)
+  // Each scenario against its own verdict before this run, as the status line and Trends count it:
+  // the run listed before may not have judged the same scenarios.
+  const before = run.rows.flatMap(row => {
+    const was = verdictsBefore(verdicts, row.id, run.runId).at(-1)
 
-  await update($, runVersusAtom, () => (before === undefined ? null : { runId: run.runId, previous: before.runId, ...versusPrevious(before.rows, run.rows) }))
+    return was === undefined ? [] : [{ id: row.id, status: was }]
+  })
+
+  await update($, runVersusAtom, () =>
+    loc === undefined || (previous === undefined && before.length === 0) ? null : { runId: run.runId, previous: previous ?? '', ...versusPrevious(before, run.rows) },
+  )
 }
 
 /** What the heat grid posted: a cell opens that verdict in the drill-down; a key it does not use is the pane's hotkey. */

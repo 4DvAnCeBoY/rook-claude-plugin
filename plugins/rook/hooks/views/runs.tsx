@@ -36,11 +36,11 @@ const ICON: Record<RookStatus, { glyph: string; color: string }> = {
 /** A scenario row of a run's detail: `✗ SC-004 Manager-approval override…`. */
 export const scenarioLine = (row: { id: string; title: string; status: RookStatus }): string => `${ICON[row.status].glyph} ${row.id}${row.title ? ` ${row.title}` : ''}`
 
-/** `vs previous run: regressed SC-002 · fixed SC-004`, or that nothing moved. */
+/** `vs each scenario's verdict before: regressed SC-002 · fixed SC-004`, or that nothing moved. */
 export const versusLine = (versus: { regressed: readonly string[]; fixed: readonly string[] }): string =>
   versus.regressed.length === 0 && versus.fixed.length === 0
-    ? 'vs previous run: no scenario regressed or was fixed'
-    : `vs previous run: ${[
+    ? "vs each scenario's verdict before: none regressed or was fixed"
+    : `vs each scenario's verdict before: ${[
         versus.regressed.length > 0 ? `regressed ${versus.regressed.join(', ')}` : undefined,
         versus.fixed.length > 0 ? `fixed ${versus.fixed.join(', ')}` : undefined,
       ]
@@ -156,7 +156,6 @@ function RunDetail(props: RunsTabProps & { run: RookRunView }) {
         <Box key="run-versus">
           <Text wrap="wrap">
             {versusLine(props.versus)}
-            <Text dimColor> ({props.versus.previous})</Text>
           </Text>
         </Box>
       )}

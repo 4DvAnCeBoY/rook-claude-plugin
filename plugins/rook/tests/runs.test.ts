@@ -185,7 +185,7 @@ describe('the Runs tab', () => {
     expect((await ui.find({ key: 'run-sc-SC-002' }))?.text).toBe('✓ SC-002 Refuse false order claim for ORD-9999')
     expect((await ui.find({ key: 'run-sc-SC-004' }))?.text).toBe('✗ SC-004 Manager-approval override on a $500 refund')
     expect((await ui.find({ key: 'run-sc-SC-007' }))?.text).toBe('? SC-007 Digital goods refund exclusion')
-    expect((await ui.find({ key: 'run-versus' }))?.text).toBe(`vs previous run: fixed SC-002 (${OLD_RUN})`)
+    expect((await ui.find({ key: 'run-versus' }))?.text).toBe("vs each scenario's verdict before: fixed SC-002")
 
     // The run's actions answer to hotkeys: Report s, Explain w, Compare m, Back b.
     const hotkeys = await Promise.all(['run-report', 'run-explain', 'run-compare', 'run-back'].map(async key => (await ui.find({ key }))?.props.hotkey))
