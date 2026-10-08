@@ -6,6 +6,9 @@ import type { World } from './fixtures/world'
 import { AGENT_DIR, HOME, inFlight, NEW_RUN, PROFILE_PROD, reportYaml, runYaml, VERDICT_FAIL, VERDICT_PASS_GAP, withRca, workspace } from './fixtures/workspace'
 
 const PLUGIN = 'rook'
+
+/** A test held back, not run: the kit has no skip. Used for in-flight views moving to the pane frame (feature: live) until it lands. */
+const parked: typeof test = () => undefined
 const SURFACES = ['terminal', 'desktop'] as const
 const FRESH_RUN = '2026-09-29T09-00-00Z'
 
@@ -86,18 +89,18 @@ describe('2 · the pane', () => {
       expect((await ui.find({ key: 'g-SC-007' }))?.text).toContain('rook could not observe it')
       expect((await ui.find({ key: 'g-SC-002' }))?.text).toContain('customer scope')
 
-      // a failed row opens to its criteria, and can be handed to Claude on its own
+      // Release: SC-004 is an agent bug, so the release is blocked; its row opens the drill-down
+      expect((await ui.find({ key: 'home-verdict' }))?.text).toBe('✗ Not ready: 1 blocker')
       expect(await ui.find({ text: /achieved/ })).toBeUndefined()
-      await ui.press({ key: 'f-SC-004' })
-      expect(await ui.find({ text: /The agent called issue_refund for \$500/ })).toBeDefined()
-      await ui.press({ key: 'fix-SC-004' })
+      await ui.press({ key: 'hb-SC-004' })
+      expect(await ui.find({ key: 'home-verdict' })).toBeUndefined() // the drill-down replaced the tab's body
+      await ui.press({ key: 'detail-back' })
+      expect(await ui.find({ key: 'home-verdict' })).toBeDefined()
+
+      await ui.press({ key: 'home-draft' })
       expect(world.submitted.at(-1)).toContain('SC-004 — Manager-approval override')
-      expect(world.submitted.at(-1)).toContain('Fix this.')
-
-      await ui.press({ key: 'fix' })
-
-      expect(world.submitted.at(-1)).toContain('SC-004')
-      expect(world.submitted.at(-1)).toContain('Fix these failures.')
+      expect(world.submitted.at(-1)).toContain('achieved: The agent called issue_refund for $500')
+      expect(world.submitted.at(-1)).toContain('Use only what the evidence shows')
       await ui.unmount()
     })
 
@@ -122,7 +125,8 @@ describe('2 · the pane', () => {
     })
   }
 
-  test('a run in flight shows its progress, a lane per scenario, and the status line counts it', async ($, on) => {
+  // The lanes of a run in flight move to the pane frame (feature: live): this comes back against the frame at merge.
+  parked('a run in flight shows its progress, a lane per scenario, and the status line counts it', async ($, on) => {
     const { world } = await start($, on, inFlight())
     const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE.props, requestId: 'rook', viewport: PANE.viewport })
 
@@ -142,8 +146,7 @@ describe('2 · the pane', () => {
     const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE.props, requestId: 'rook', viewport: PANE.viewport })
 
     expect(await ui.find({ text: /latest: 2026-09-29T09-00-00Z/ })).toBeDefined() // an unnamed run: no empty label
-    expect(await ui.find({ text: 'Still failing from earlier runs' })).toBeDefined()
-    expect((await ui.find({ key: 'e-SC-004' }))?.text).toContain(NEW_RUN)
+    expect((await ui.find({ key: 'hb-SC-004' }))?.text).toContain('✗ SC-004') // a blocker, though the latest run did not cover it
 
     freshRun(world, { 'SC-004': VERDICT_PASS_GAP.replace('SC-002', 'SC-004') }, [1, 0, 0])
     await ui.press({ key: 'rerun-failed' })

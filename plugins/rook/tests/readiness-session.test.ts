@@ -91,7 +91,7 @@ describe('readiness · results but no project', () => {
     expect((await ui.find({ key: 'run-block' }))?.text).toBe(`⚠ ${NO_PROJECT}`)
     expect(await ui.find({ key: 'run-all' })).toBeUndefined()
     expect(await ui.find({ key: 'rerun-failed' })).toBeUndefined()
-    expect(await ui.find({ key: 'fix' })).toBeDefined() // fixing needs no run
+    expect(await ui.find({ key: 'home-draft' })).toBeDefined() // drafting bug reports needs no run
     expect(world.statuses.at(-1)).toBe('✓1 ✗1 ?1 · 2 gaps · ↑1 fixed · setup: select a project')
   })
 
