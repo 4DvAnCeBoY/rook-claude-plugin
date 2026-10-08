@@ -7,7 +7,7 @@ This guide covers the two situations you will be in:
 
 [![Walkthrough video: every stage in one Claude Code session](media/walkthrough-poster.png)](media/rook-plugin-walkthrough.mp4)
 
-*[Watch the 4½-minute walkthrough](media/rook-plugin-walkthrough.mp4): a real session against a demo banking agent, from an empty repository to a fix with a re-test prompt.*
+*[Watch the setup walkthrough](media/rook-plugin-walkthrough.mp4) (Case A, from an empty repository to a fix), and [v0.2 in 4 minutes](media/rook-plugin-v2-walkthrough.mp4) (Case B: the tabs, a confirmed run, the verdict card, the re-test bar, Cancel, budget and CI).*
 
 ## Before either case
 

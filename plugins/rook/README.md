@@ -4,7 +4,7 @@
 
 A Claude Code mod for [rook](https://github.com/LambdaTest/rook), TestMu AI's agent-assurance CLI. It puts rook's verdicts where your agent is being written. Claude can run the scenarios, read rook's evidence and fix what failed, and you watch it happen in a live pane.
 
-> **New here?** Watch the [walkthrough video](../../docs/media/rook-plugin-walkthrough.mp4) and read [Getting started](../../docs/getting-started.md): one path for a repository with no rook tests, one for a repository that has them.
+> **New here?** Watch [v0.2 in 4 minutes](../../docs/media/rook-plugin-v2-walkthrough.mp4) and the [setup walkthrough](../../docs/media/rook-plugin-walkthrough.mp4) and read [Getting started](../../docs/getting-started.md): one path for a repository with no rook tests, one for a repository that has them.
 
 > Status: early access, like Claude Code's function-hooks API it is built on. Requires Claude Code 2.1.288 or newer and the rook CLI on `PATH` (`brew install lambdatest/rook/rook`).
 
