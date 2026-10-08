@@ -194,11 +194,13 @@ describe('drill-down · sections and actions', () => {
     expect(ago(90_000)).toBe('1m')
   })
 
-  test('the waterfall scales each hook to the longest and marks the one that failed', async () => {
+  test('the waterfall staggers each hook after the ones before it, sized by its share, and marks the one that failed', async () => {
     const rows = waterfall((await sc001()).phases, 20)
 
     expect(rows.map(r => r.name)).toEqual(['open', 'execute', 'close', 'collect'])
-    expect(rows.find(r => r.name === 'collect')!.bar).toBe('█'.repeat(20))
+    // Four hooks of about the same length: four steps of about a quarter each, left to right.
+    expect(rows.map(r => r.bar.length - r.bar.trimStart().length)).toEqual([0, 5, 9, 14])
+    expect(rows.every(r => r.bar.trim().length >= 4 && r.bar.length <= 20)).toBe(true)
     expect(rows.find(r => r.name === 'execute')!.isFailed).toBe(true)
     expect(rows.find(r => r.name === 'execute')!.error).toContain('returned 500')
     expect(waterfall((await sc017()).phases, 20).find(r => r.name === 'execute')!.calls).toEqual(['lookup_order({"order_id":"ORD-1002"})'])

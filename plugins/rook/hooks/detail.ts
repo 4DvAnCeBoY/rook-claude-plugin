@@ -132,17 +132,26 @@ const callText = (call: { name: string; arguments?: unknown }): string => {
   }
 }
 
-/** Each hook's bar of █ proportional to its duration, the longest filling `width`; a hook that ran gets at least one. */
+/**
+ * A waterfall: each hook's bar starts where the hooks before it ended and is
+ * sized by its share of the whole, so the slow one stands out and the order
+ * reads left to right. Capped so the durations beside it still fit; a hook
+ * that ran gets at least one cell.
+ */
 export function waterfall(phases: readonly RookPhase[], width: number): WaterfallRow[] {
-  const longest = Math.max(1, ...phases.map(p => p.durationMs ?? 0))
-  const room = Math.max(4, width)
+  const total = Math.max(1, phases.reduce((sum, p) => sum + (p.durationMs ?? 0), 0))
+  const room = Math.max(8, Math.min(width, 48))
+  let elapsedMs = 0
 
   return phases.map(p => {
-    const cells = p.durationMs === undefined ? 0 : Math.max(p.ran ? 1 : 0, Math.round((p.durationMs / longest) * room))
+    const offset = Math.min(room - 1, Math.round((elapsedMs / total) * room))
+    const cells = p.durationMs === undefined ? 0 : Math.max(p.ran ? 1 : 0, Math.round((p.durationMs / total) * room))
+
+    elapsedMs += p.durationMs ?? 0
 
     return {
       name: p.name,
-      bar: '█'.repeat(cells),
+      bar: cells === 0 ? '' : ' '.repeat(offset) + '█'.repeat(Math.max(1, Math.min(cells, room - offset))),
       ms: p.durationMs === undefined ? (p.ran ? '' : 'not run') : duration(p.durationMs),
       isFailed: p.ran && !p.ok,
       ...(p.error !== undefined && { error: p.error }),
