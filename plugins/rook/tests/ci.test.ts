@@ -9,6 +9,7 @@ import type { World } from './fixtures/world'
 import { AGENT_DIR, CWD, HOME, workspace } from './fixtures/workspace'
 
 const SHA = '5be0db96c7616cb592c4b5cd2adb0f68b141ddcd'
+const VER = '0.4.2'
 const SECRET_VALUE = 'sk-live-do-not-leak-0042'
 
 type Ran = { result?: unknown; deny?: string; text?: string }
@@ -36,7 +37,7 @@ async function start($: Engine, on: Parameters<typeof worldOf>[0], files: Record
 
   const world: World = worldOf(on, files)
 
-  world.version = { stdout: `${SHA}\n`, code: 0 }
+  world.version = { stdout: `rook ${VER} (${SHA})\n`, code: 0 }
   mock.clock(on, { now: 1_000_000 })
   on('tool.call', () => ({ result: 'ok' }) as never)
   await $.session.start(SESSION)
@@ -49,7 +50,7 @@ const withStoredValue = () =>
   workspace({ [`${HOME}/.testmuai/rook/env.json`]: JSON.stringify({ projects: { [CWD]: { DEMO_API_TOKEN: SECRET_VALUE } } }) })
 
 describe('ci · the workflow', () => {
-  const plan = { profileId: 'commerce-http', variables: ['COMMERCE_BASE_URL', 'DEMO_API_TOKEN'], version: SHA }
+  const plan = { profileId: 'commerce-http', variables: ['COMMERCE_BASE_URL', 'DEMO_API_TOKEN'], version: VER }
 
   test('parses as YAML: pull_request trigger, install, sign-in, run, upload, verdicts', () => {
     const yaml = workflowYaml(plan)
@@ -73,8 +74,10 @@ describe('ci · the workflow', () => {
       'Upload the run',
       'Verdicts',
     ])
-    expect(map(named('Install rook').env).ROOK_GITHUB_TOKEN).toBe('${{ secrets.ROOK_GITHUB_TOKEN }}')
-    expect(map(named('Install rook').env).ROOK_VERSION).toBe(`\${{ vars.ROOK_VERSION || '${SHA}' }}`)
+    expect(String(named('Install rook').run)).toContain('npm install -g "@testmuai/rook@$ROOK_VERSION"')
+    expect(map(named('Install rook').env).ROOK_VERSION).toBe(`\${{ vars.ROOK_VERSION || '${VER}' }}`)
+    expect(workflowYaml(plan)).not.toContain('ROOK_GITHUB_TOKEN')
+    expect(workflowYaml(plan)).not.toContain('LambdatestIncPrivate')
     expect(map(named('Sign in to rook').env).ROOK_AUTH).toBe('${{ secrets.ROOK_AUTH }}')
     expect(String(named('Run rook').run)).toContain("rook run --test --json --yes --profile 'commerce-http' \"${select[@]}\" > rook-run.json")
     expect(String(named('Run rook').run)).toContain('select=(--class functional)')
@@ -105,7 +108,7 @@ describe('ci · the workflow', () => {
   test('a comment explains each secret', () => {
     const yaml = workflowYaml(plan)
 
-    for (const name of ['ROOK_GITHUB_TOKEN', 'ROOK_AUTH']) {
+    for (const name of ['ROOK_AUTH']) {
       expect(yaml).toMatch(new RegExp(`# Secret ${name}:`))
     }
     expect(yaml).toContain('# The variables profile commerce-http declares, one repository secret each')
@@ -118,7 +121,7 @@ describe('ci · the workflow', () => {
     expect(yaml).not.toContain('rm ')
     expect(yaml).not.toContain('secrets.GITHUB_TOKEN')
     expect(yaml).toContain('OK_VAR: ${{ secrets.OK_VAR }}')
-    expect(yaml).toContain('ROOK_VERSION: ${{ vars.ROOK_VERSION }}')
+    expect(yaml).toContain("ROOK_VERSION: ${{ vars.ROOK_VERSION || 'latest' }}")
     expect(previewText({ ...plan, variables: ['GITHUB_TOKEN'] }, yaml, false)).toContain('Not usable as secret names (rename them in the profile): GITHUB_TOKEN')
   })
 
@@ -137,11 +140,12 @@ describe('ci · /rook ci and the ci tool', () => {
     const text = ran.text ?? ''
 
     expect(text).toContain(`${WORKFLOW_PATH} is not written yet; /rook ci write writes it.`)
-    for (const name of ['ROOK_GITHUB_TOKEN', 'ROOK_AUTH', 'COMMERCE_BASE_URL', 'DEMO_API_TOKEN']) {
+    for (const name of ['ROOK_AUTH', 'COMMERCE_BASE_URL', 'DEMO_API_TOKEN']) {
       expect(text).toContain(`gh secret set ${name}`)
     }
     expect(text).toContain('```yaml\n# rook: run the agent')
-    expect(text).toContain(`ROOK_VERSION: \${{ vars.ROOK_VERSION || '${SHA}' }}`)
+    expect(text).toContain(`ROOK_VERSION: \${{ vars.ROOK_VERSION || '${VER}' }}`)
+    expect(text).not.toContain('ROOK_GITHUB_TOKEN')
     expect(text).not.toContain(SECRET_VALUE)
     expect(writes).toEqual([])
     expect(world.files.has(WORKFLOW_PATH)).toBe(false)

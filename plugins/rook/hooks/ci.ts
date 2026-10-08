@@ -15,7 +15,8 @@
  * - `rook run --json` exits 1 only when its document says `ok: false` (rook
  *   could not test the agent). Fail verdicts exit 0 in this build, so the job
  *   reads `.report.totals` rather than the exit code.
- * - Install is the private installer (`ROOK_GITHUB_TOKEN`, `ROOK_VERSION`).
+ * - Install is the public npm package `@testmuai/rook`, pinned to the local
+ *   version when it is a semver, else `latest`; `ROOK_VERSION` overrides.
  * - A profile's declared variables are read from the process environment, so
  *   each one is a repository secret set on the run step.
  *
@@ -24,19 +25,14 @@
 
 export const WORKFLOW_PATH = '.github/workflows/rook.yml'
 
-const INSTALL_URL = 'https://raw.githubusercontent.com/LambdatestIncPrivate/rook/stage/scripts/install.sh'
+const NPM_PACKAGE = '@testmuai/rook'
 const SECRET_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
-const SHA = /^[0-9a-f]{7,40}$/
+const SEMVER = /^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/
 const PROFILE_ID = /^[\w.][\w.-]{0,63}$/
 const SAFE_RULE = /^[\w.@*:/()\s,=-]{1,200}$/
 
 /** The secrets the workflow itself needs, before the profile's own. */
 export const BASE_SECRETS = [
-  {
-    name: 'ROOK_GITHUB_TOKEN',
-    purpose: "a GitHub token with read access to LambdatestIncPrivate/rook: rook's installer downloads from that private repository",
-    how: 'gh secret set ROOK_GITHUB_TOKEN',
-  },
   {
     name: 'ROOK_AUTH',
     purpose: "rook's sign-in for the job, a base64 tarball of a signed-in ROOK_HOME's profiles/ folder",
@@ -49,7 +45,7 @@ export type CiPlan = {
   profileId?: string
   /** The variables that profile declares, names only. */
   variables: readonly string[]
-  /** The installed rook's commit, pinned so CI runs the build the person tested with. */
+  /** The installed rook's version, pinned when it is an npm semver so CI runs what the person tested with. */
   version?: string
   /** `allowRules` from /config: when set, they replace `--yes`. */
   allowRules?: readonly string[]
@@ -112,7 +108,7 @@ function approvalOf(plan: CiPlan): string {
 export function workflowYaml(plan: CiPlan): string {
   const { usable } = variablesOf(plan)
   const profile = plan.profileId !== undefined && PROFILE_ID.test(plan.profileId) ? plan.profileId : undefined
-  const version = plan.version !== undefined && SHA.test(plan.version) ? plan.version : undefined
+  const version = plan.version !== undefined && SEMVER.test(plan.version) ? plan.version : undefined
   const runLine = ['rook run --test --json', approvalOf(plan), ...(profile === undefined ? [] : [`--profile '${profile}'`]), '"${select[@]}" > rook-run.json'].join(' ')
 
   const lines = [
@@ -155,14 +151,11 @@ export function workflowYaml(plan: CiPlan): string {
     "          node-version: '22'",
     '      - name: Install rook',
     '        env:',
-    '          # Secret ROOK_GITHUB_TOKEN: a GitHub token that can read LambdatestIncPrivate/rook.',
-    '          # The installer and the release download both live in that private repository.',
-    '          ROOK_GITHUB_TOKEN: ${{ secrets.ROOK_GITHUB_TOKEN }}',
-    '          # The rook build to install: the one /rook ci saw, unless the ROOK_VERSION variable says otherwise.',
-    `          ROOK_VERSION: \${{ vars.ROOK_VERSION${version === undefined ? '' : ` || '${version}'`} }}`,
+    `          # The rook version to install from npm: ${version === undefined ? 'the latest' : 'the one /rook ci saw'}, unless the ROOK_VERSION variable says otherwise.`,
+    `          ROOK_VERSION: \${{ vars.ROOK_VERSION || '${version ?? 'latest'}' }}`,
     '        run: |',
-    `          curl -fsSL -H "Authorization: Bearer $ROOK_GITHUB_TOKEN" ${INSTALL_URL} | bash`,
-    '          echo "$HOME/.testmuai/rook/bin" >> "$GITHUB_PATH"',
+    `          npm install -g "${NPM_PACKAGE}@$ROOK_VERSION"`,
+    '          rook --version',
     '      - name: Sign in to rook',
     '        env:',
     "          # Secret ROOK_AUTH: rook's sign-in, a base64 tarball of a ROOK_HOME's profiles/ folder.",

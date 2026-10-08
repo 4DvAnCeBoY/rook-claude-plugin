@@ -2760,10 +2760,10 @@ async function ciPlan($: EngineInterface, ctx: Ctx, request: CiRequest): Promise
 
   const target = await profileOf($, ctx)
   const profileText = target === undefined ? undefined : await ioOf($, ctx).read(`${loc.agentDir}/profiles/${target.profileId}.yaml`)
-  // `rook --version` prints the build's commit; readiness keeps only a semver, so ask again.
+  // `rook --version`: a semver pins the npm install in CI; a build's commit does not, and CI installs latest.
   const version = await $.process
     .run([ctx.bin, '--version'], { env: CLI_ENV, stdin: '', timeoutMs: 10_000 })
-    .then(ran => (ran.exitCode === 0 ? /\b[0-9a-f]{7,40}\b/.exec(ran.stdout)?.[0] : undefined))
+    .then(ran => (ran.exitCode === 0 ? /\b\d+\.\d+\.\d+(?:[-+][\w.-]+)?\b/.exec(ran.stdout)?.[0] : undefined))
     .catch(() => undefined)
 
   return {
