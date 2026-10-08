@@ -92,7 +92,7 @@ describe('readiness · results but no project', () => {
     expect(await ui.find({ key: 'run-all' })).toBeUndefined()
     expect(await ui.find({ key: 'rerun-failed' })).toBeUndefined()
     expect(await ui.find({ key: 'home-draft' })).toBeDefined() // drafting bug reports needs no run
-    expect(world.statuses.at(-1)).toBe('✓1 ✗1 ?1 · 2 gaps · ↑1 fixed · setup: select a project')
+    expect(world.statuses.at(-1)).toBe('✓1 ✗1 ?1 · setup: select a project')
   })
 
   test('/rook run refuses instead of saying "running in the background"', async ($, on) => {
@@ -109,7 +109,7 @@ describe('readiness · CLI facts', () => {
       w.auth = { code: 1, stdout: 'not signed in — run `rook login`\n' }
     })
 
-    expect(world.statuses.at(-1)).toBe('✓1 ✗1 ?1 · 2 gaps · ↑1 fixed · setup: sign in')
+    expect(world.statuses.at(-1)).toBe('✓1 ✗1 ?1 · setup: sign in')
     expect((await $.command.run(command('run'))).text).toBe("can't run yet: not signed in. Next: run `! rook login` (it opens a browser).")
     expect(world.invocations).toEqual([])
   })

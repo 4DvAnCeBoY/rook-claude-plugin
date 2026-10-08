@@ -8,9 +8,6 @@ import { PANE, SESSION, worldOf } from './fixtures/world'
 import { AGENT_DIR, reportYaml, runYaml, VERDICT_PASS_GAP, workspace } from './fixtures/workspace'
 
 const PLUGIN = 'rook'
-
-/** A test held back, not run: the kit has no skip. Used for in-flight views moving to the pane frame (feature: live) until it lands. */
-const parked: typeof test = () => undefined
 const SURFACES = ['terminal', 'desktop'] as const
 const FRESH = '2026-10-02T09-00-00Z'
 
@@ -156,9 +153,8 @@ describe('health · the pane', () => {
   })
 })
 
-// Cancel moves to the pane frame (feature: live): these come back against its frame button at merge.
 describe('health · cancel', () => {
-  parked('a cancelled run rook left unfinished shows as stopped, not running, and is not reported as finished', async ($, on) => {
+  test('a cancelled run rook left unfinished shows as stopped, not running, and is not reported as finished', async ($, on) => {
     const { world, clock } = await start($, on, workspace())
     const ui = await mountPane($)
     let release = () => undefined as void
@@ -186,7 +182,7 @@ describe('health · cancel', () => {
     release()
   })
 
-  parked('Cancel on a pane run ends the rook child, clears the run and says so', async ($, on) => {
+  test('Cancel on a pane run ends the rook child, clears the run and says so', async ($, on) => {
     const { world, clock } = await start($, on, workspace())
     const ui = await mountPane($)
     let release = () => undefined as void
@@ -201,18 +197,18 @@ describe('health · cancel', () => {
     await ui.press({ key: 'confirm-yes' })
     const advancing = clock.advance(10)
 
-    expect((await ui.find({ key: 'running' }))?.text).toContain('▸ running SC-004')
+    expect((await ui.find({ key: 'live-head' }))?.text).toContain('◐')
     await ui.press({ key: 'cancel-run' })
     await advancing
 
     expect(world.toasts).toContain('run cancelled')
-    expect(await ui.find({ key: 'running' })).toBeUndefined()
+    expect(await ui.find({ key: 'live-head' })).toBeUndefined()
     expect(await ui.find({ key: 'last-error' })).toBeUndefined()
     expect(await ui.find({ key: 'run-all' })).toBeDefined() // free to run again
     release()
   })
 
-  parked('/rook run in the background can be cancelled from the pane too; a run Claude started offers no Cancel', async ($, on) => {
+  test('/rook run in the background can be cancelled from the pane too; a run Claude started offers no Cancel', async ($, on) => {
     const { world, clock } = await start($, on, workspace())
     const ui = await mountPane($)
     let release = () => undefined as void
@@ -234,7 +230,7 @@ describe('health · cancel', () => {
     let seen: unknown
     world.onRun = () => ({ code: 0, stdout: JSON.stringify({ ok: true, run_id: FRESH }), writes: { [`${AGENT_DIR}/runs/${FRESH}/run.yaml`]: runYaml(FRESH, 'x', ['SC-004']), [`${AGENT_DIR}/runs/${FRESH}/scenarios/SC-004/verdict.yaml`]: VERDICT_PASS_GAP.replace('SC-002', 'SC-004'), [`${AGENT_DIR}/runs/${FRESH}/report.yaml`]: reportYaml(FRESH, 1, 0, 0, 1) } })
     world.during = async () => {
-      seen = { running: await ui.find({ key: 'running' }), cancel: await ui.find({ key: 'cancel-run' }) }
+      seen = { running: await ui.find({ key: 'live-head' }), cancel: await ui.find({ key: 'cancel-run' }) }
     }
     await $.tool.call({ tool: 'mcp__rook__run', only: ['SC-004'] } as never)
     expect((seen as { running?: unknown }).running).toBeDefined()
