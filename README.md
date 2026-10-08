@@ -4,9 +4,9 @@
 
 A Claude Code plugin for [rook](https://github.com/LambdaTest/rook), TestMu AI's agent-assurance CLI. While Claude writes or changes your AI agent, this plugin lets Claude set rook up, run rook's scenarios against the agent, read the verdicts and the evidence, and fix what failed. You watch the results in a live pane.
 
-[![Watch rook for Claude Code v0.2: pane tabs, a confirmed run with live lanes, a verdict card and a re-test bar, in a real session](docs/media/walkthrough-v2-poster.png)](docs/media/rook-plugin-v2-walkthrough.mp4)
+[![Watch rook for Claude Code v0.3: the side pane for QEs and developers, in real sessions](docs/media/walkthrough-v3-poster.png)](docs/media/rook-plugin-v3-walkthrough.mp4)
 
-*▶ [Watch v0.2 in 4 minutes](docs/media/rook-plugin-v2-walkthrough.mp4): the published plugin in a real Claude Code session against a real rook project: the four tabs, fixing an Unable to Verify, the re-test bar, Run all with confirm and Cancel, budget and CI. Setting rook up from an empty repository is in [the setup walkthrough](docs/media/rook-plugin-walkthrough.mp4).*
+*▶ [Watch v0.3 in 6 minutes](docs/media/rook-plugin-v3-walkthrough.mp4): five real sessions with the side pane docked: a repo rook has never seen, a repo pulled with rook tests but never run, the QE's Release view and drill-down with a bug report from evidence, a developer's fix and re-test, and edits and runs from another terminal flagged live. Earlier: [v0.2 in 4 minutes](docs/media/rook-plugin-v2-walkthrough.mp4): the published plugin in a real Claude Code session against a real rook project: the four tabs, fixing an Unable to Verify, the re-test bar, Run all with confirm and Cancel, budget and CI. Setting rook up from an empty repository is in [the setup walkthrough](docs/media/rook-plugin-walkthrough.mp4).*
 
 ## Start here
 
