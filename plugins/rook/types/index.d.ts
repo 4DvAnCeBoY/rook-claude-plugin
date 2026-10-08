@@ -62,6 +62,8 @@ export type RookRunView = {
   planned: number
   done: number
   finished: boolean
+  /** Unfinished on disk but over: cancelled, or nothing has written to it for a while (rook was stopped). Never reported as finished. */
+  stopped?: boolean
   counts: RookCounts
   rows: RookScenarioRow[]
   lanes: RookLane[]
