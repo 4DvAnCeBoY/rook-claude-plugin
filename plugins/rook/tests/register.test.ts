@@ -196,7 +196,8 @@ describe('2 · the pane', () => {
     expect((await ui.find({ key: 's-project' }))?.text).toBe('✗ no project selected')
     expect((await ui.find({ key: 's-agent' }))?.text).toBe('✗ no agent yet')
     expect((await ui.find({ key: 'next' }))?.text).toContain('/rook project use <id>')
-    expect(await ui.findAll({ type: 'Button' })).toHaveLength(0)
+    // the guided start's buttons for that step, and nothing else (feature: keys)
+    expect((await ui.findAll({ type: 'Button' })).map(button => button.key)).toEqual(['start-go', 'start-other'])
   })
 
   test('Re-run failed starts a background run of just the failed scenarios', async ($, on) => {
