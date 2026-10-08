@@ -302,7 +302,7 @@ type Ctx = {
   cli: CliFacts
   /** The agent's runs list as the Runs tab last read it, to skip re-reading when nothing changed. */
   historySignature?: string
-  /** Runs the person cancelled: shown as stopped, not as running, though rook left them unfinished. */
+  /** Runs the person cancelled (`<agent dir>#<run id>`, kept in `$.store`): shown as stopped, though rook left them unfinished. */
   cancelled?: Set<string>
   /** Modification times of the agent's tracked sources at the last poll, keyed by agent directory. */
   sourceStamps?: { agentDir: string; stamps: Map<string, number> }
@@ -1942,6 +1942,8 @@ function jobLabel(ctx: Ctx, kind: RookJob['kind'], instruction: string | undefin
 /** The pane's Cancel on a run the person started: the child ends, backgroundRun clears the rest and says so. */
 /** Nothing has written to an unfinished run for this long: rook is not running it any more. */
 const STOPPED_MS = 10 * 60_000
+/** `$.store` key: the runs the person cancelled, `<agent dir>#<run id>`, newest last. */
+const CANCELLED_KEY = 'cancelledRuns'
 
 /**
  * An unfinished run this session is not running is over when the person
@@ -1956,7 +1958,10 @@ async function liveOrStopped($: EngineInterface, ctx: Ctx, loc: Located, run: Ro
 
   const stopped: RookRunView = { ...run, finished: true, stopped: true, lanes: [] }
 
-  if (ctx.cancelled?.has(run.runId)) {
+  // Cancels outlive the session that pressed Cancel: a new one must not call the run live.
+  ctx.cancelled ??= new Set(((await $.store.get(CANCELLED_KEY).catch(() => undefined)) as string[] | undefined) ?? [])
+
+  if (ctx.cancelled.has(`${loc.agentDir}#${run.runId}`)) {
     return stopped
   }
 
@@ -1977,9 +1982,12 @@ async function cancelRun($: EngineInterface, ctx: Ctx): Promise<void> {
 
   // rook leaves the run folder unfinished: remember it, so the pane says stopped rather than running.
   const inFlight = (await read($, snapshotAtom))?.latest
+  const loc = ctx.located
 
-  if (inFlight !== undefined && !inFlight.finished) {
-    ;(ctx.cancelled ??= new Set()).add(inFlight.runId)
+  if (inFlight !== undefined && !inFlight.finished && loc !== undefined) {
+    ctx.cancelled ??= new Set(((await $.store.get(CANCELLED_KEY).catch(() => undefined)) as string[] | undefined) ?? [])
+    ctx.cancelled.add(`${loc.agentDir}#${inFlight.runId}`)
+    await $.store.set(CANCELLED_KEY, [...ctx.cancelled].slice(-50)).catch(() => undefined)
   }
 
   if (ctx.runAbort !== undefined) {
