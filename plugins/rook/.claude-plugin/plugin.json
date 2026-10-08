@@ -34,6 +34,16 @@
         "off"
       ]
     },
+    "lens": {
+      "type": "string",
+      "title": "Pane view",
+      "description": "qe leads the pane with release readiness: blockers, verdicts to check, suite health and coverage. dev leads with your change: edited files, the scenarios they affect, what broke and what it cost. Press l in the pane to switch; the choice is kept.",
+      "default": "qe",
+      "options": [
+        "qe",
+        "dev"
+      ]
+    },
     "statusLine": {
       "type": "boolean",
       "title": "Status line score",

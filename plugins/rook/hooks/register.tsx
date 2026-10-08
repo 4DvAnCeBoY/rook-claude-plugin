@@ -65,6 +65,26 @@ import { RunProgressRow, VerdictCard } from './views/card'
 import { parseCiArgs, previewText, WORKFLOW_PATH, workflowYaml, writtenText } from './ci'
 import type { CiPlan, CiRequest } from './ci'
 // ── end imports: ci
+
+// ── imports: shared lens and drill-down
+import { readEvidence, verdictHistory } from './evidence'
+import type { RookLens } from '../types'
+// ── end imports: shared lens and drill-down
+
+// ── imports: drill-down
+// ── end imports: drill-down
+
+// ── imports: home
+// ── end imports: home
+
+// ── imports: trends
+// ── end imports: trends
+
+// ── imports: live
+// ── end imports: live
+
+// ── imports: keys
+// ── end imports: keys
 import {
   agentsText,
   balanceText,
@@ -221,6 +241,28 @@ const bandOpenAtom = atom({ plugin: 'rook', key: 'isBandOpen' } as const, false)
 // ── atoms: ci
 // ── end atoms: ci
 
+// ── atoms: shared lens and drill-down
+const lensAtom = atom({ plugin: 'rook', key: 'lens' } as const, 'qe')
+const detailAtom = atom({ plugin: 'rook', key: 'detail' } as const, null)
+const evidenceAtom = atom({ plugin: 'rook', key: 'evidence' } as const, null)
+const verdictsAtom = atom({ plugin: 'rook', key: 'verdicts' } as const, [])
+// ── end atoms: shared lens and drill-down
+
+// ── atoms: drill-down
+// ── end atoms: drill-down
+
+// ── atoms: home
+// ── end atoms: home
+
+// ── atoms: trends
+// ── end atoms: trends
+
+// ── atoms: live
+// ── end atoms: live
+
+// ── atoms: keys
+// ── end atoms: keys
+
 // The plugin's own tools as exact patterns: the engine's tool table is laid
 // when the mod loads, before session.start registers them.
 const RUN_TOOL = /^mcp__rook__run$/
@@ -312,6 +354,10 @@ type Ctx = {
   runAbort?: AbortController
   /** The agent's scenario files as last read for the Scenarios tab, keyed by agent directory and index signature. */
   scenarioList?: { key: string; list: ScenarioInfo[] }
+  /** The `lens` option: who the pane leads for until the person toggles it (the toggle is kept in $.store). */
+  lensDefault: RookLens
+  /** The runs the verdict history was last read from, to skip re-reading when nothing changed. */
+  verdictSignature?: string
 }
 
 /** Claude Code labels a plugin's toast with its name: drop rook's own prefix so it reads once. */
@@ -599,6 +645,7 @@ async function poll($: EngineInterface, ctx: Ctx): Promise<void> {
     }
   } finally {
     await refreshHistory($, ctx)
+    await refreshVerdicts($, ctx)
     ctx.isPolling = false
     await showStatus($, ctx)
   }
@@ -1243,7 +1290,7 @@ async function rookCommand($: EngineInterface, ctx: Ctx, e: CommandRunInput): Pr
   switch (sub) {
     case 'pane':
     case 'open': {
-      const opened = await $.ui.open({ id: PANE, title: 'rook' })
+      const opened = await openPane($, { focus: true })
       const readiness = await readinessNow($, ctx)
       const setup = readiness?.next === undefined ? '' : `\n${checklistText(readiness)}`
 
@@ -1252,12 +1299,11 @@ async function rookCommand($: EngineInterface, ctx: Ctx, e: CommandRunInput): Pr
     case 'tab': {
       const tab = rest[0] as RookTab | undefined
 
-      if (tab !== 'health' && tab !== 'runs' && tab !== 'scenarios' && tab !== 'setup') {
-        return { text: 'rook: tab health, runs, scenarios or setup.' }
+      if (tab !== 'health' && tab !== 'runs' && tab !== 'scenarios' && tab !== 'setup' && tab !== 'trends') {
+        return { text: 'rook: tab health, runs, scenarios, trends or setup.' }
       }
 
-      await setTab($, tab)
-      await $.ui.open({ id: PANE, title: 'rook' })
+      await openPane($, { focus: true, tab })
 
       return { text: `${tab} tab open.` }
     }
@@ -1806,6 +1852,89 @@ async function curateReply($: EngineInterface, ctx: Ctx, verb: string, ids: stri
 
 async function setTab($: EngineInterface, tab: RookTab): Promise<void> {
   await update($, tabAtom, () => tab)
+}
+
+// ── shared: lens, focus and the drill-down ───────────────────────────────────
+
+const LENS_KEY = 'lens'
+
+/**
+ * Open the pane. `focus` when the person asked for it (`/rook`, a band's or a
+ * card's Open): keys go to the pane at once and Esc returns to the prompt.
+ * Never when rook opens it on its own (session start, Claude's run): it must
+ * not take the person's typing. `tab` switches first.
+ */
+async function openPane($: EngineInterface, opts: { focus?: boolean; tab?: RookTab } = {}) {
+  if (opts.tab !== undefined) {
+    await setTab($, opts.tab)
+  }
+
+  return $.ui.open({ id: PANE, title: 'rook', ...(opts.focus === true && { focus: true }) })
+}
+
+/** The lens the person last chose, else the `lens` option. Read once per session start. */
+async function loadLens($: EngineInterface, ctx: Ctx): Promise<void> {
+  const stored = await $.store.get(LENS_KEY).catch(() => undefined)
+
+  await update($, lensAtom, () => (stored === 'qe' || stored === 'dev' ? stored : ctx.lensDefault))
+}
+
+async function setLens($: EngineInterface, lens: RookLens): Promise<void> {
+  await update($, lensAtom, () => lens)
+  await $.store.set(LENS_KEY, lens).catch(() => undefined)
+}
+
+async function toggleLens($: EngineInterface): Promise<void> {
+  await setLens($, (await read($, lensAtom)) === 'qe' ? 'dev' : 'qe')
+}
+
+/** Show one scenario of one run in the drill-down, from any list in any tab. Reads its evidence once. */
+async function openDetail($: EngineInterface, ctx: Ctx, runId: string, id: string): Promise<void> {
+  const loc = ctx.located
+
+  await update($, detailAtom, () => ({ runId, id }))
+  await update($, evidenceAtom, () => null)
+
+  if (loc !== undefined) {
+    const evidence = await readEvidence(ioOf($, ctx), loc.agentDir, runId, id).catch(() => undefined)
+
+    // The person may have opened another one while this was read.
+    if ((await read($, detailAtom))?.id === id) {
+      await update($, evidenceAtom, () => evidence ?? null)
+    }
+  }
+}
+
+async function closeDetail($: EngineInterface): Promise<void> {
+  await update($, detailAtom, () => null)
+  await update($, evidenceAtom, () => null)
+}
+
+/** Each scenario's newest verdicts across runs: re-read only when the agent's runs changed. Called at the end of every poll. */
+async function refreshVerdicts($: EngineInterface, ctx: Ctx): Promise<void> {
+  try {
+    const loc = ctx.located
+
+    if (loc === undefined) {
+      return
+    }
+
+    const io = ioOf($, ctx)
+    const ids = await runIds(io, loc.agentDir)
+    const latest = (await read($, snapshotAtom))?.latest
+    const signature = `${loc.agentDir}#${ids.slice(0, 12).join(',')}#${latest?.runId === ids[0] ? latest?.done : ''}`
+
+    if (signature === ctx.verdictSignature) {
+      return
+    }
+
+    ctx.verdictSignature = signature
+    const verdicts = await verdictHistory(io, loc.agentDir, ids)
+
+    await update($, verdictsAtom, () => verdicts)
+  } catch {
+    ctx.verdictSignature = undefined
+  }
 }
 
 /** Park a credit-spending action in the pane until the person confirms it. */
@@ -2859,6 +2988,21 @@ async function ciAnswer($: EngineInterface, ctx: Ctx, request: CiRequest): Promi
 
 // ══ end feature: ci ══════════════════════════════════════════════════════════
 
+// ══ feature: drill-down (scenario evidence, owner actions, prompts) ══════════
+// ══ end feature: drill-down ══════════════════════════════════════════════════
+
+// ══ feature: home (Release for QE, My change for dev) ════════════════════════
+// ══ end feature: home ════════════════════════════════════════════════════════
+
+// ══ feature: trends (heat grid, runs per scenario) ═══════════════════════════
+// ══ end feature: trends ══════════════════════════════════════════════════════
+
+// ══ feature: live (run band, streamed results, stale verdicts, status line) ══
+// ══ end feature: live ════════════════════════════════════════════════════════
+
+// ══ feature: keys (focus, hotkeys, fresh repo, setup toggles) ════════════════
+// ══ end feature: keys ════════════════════════════════════════════════════════
+
 const APPROVALS_NOTE =
   "rook's own tool calls during the command (reading the agent's code, running its commands) are approved with --yes, " +
   'unless the person set allowRules, in which case only those are approved and rook declines the rest.'
@@ -2903,6 +3047,7 @@ export const register: Register = (on, options) => {
     isProdGuard: flagOption(options.prodGuard, true),
     prodPatterns: textOption(options.prodPatterns, 'prod,production,live'),
     approval: { allowRules: allowRulesOf(textOption(options.allowRules, '')) },
+    lensDefault: textOption(options.lens, 'qe') === 'dev' ? 'dev' : 'qe',
     cwd: '',
     located: undefined,
     agentIndex: undefined,
@@ -3161,8 +3306,10 @@ export const register: Register = (on, options) => {
       }
     })
 
+    await loadLens($, ctx)
+
     if (ctx.paneMode === 'auto' && ctx.located !== undefined) {
-      void $.ui.open({ id: PANE, title: 'rook' })
+      void openPane($)
     }
 
     return started
@@ -3380,6 +3527,8 @@ export const register: Register = (on, options) => {
     const explaining = await read($, explainingAtom)
     const tab = await read($, tabAtom)
     const confirm = await read($, confirmAtom)
+    const lens = await read($, lensAtom)
+    const detail = await read($, detailAtom)
     await read($, tickAtom)
     const now = await $.clock.now()
     const width = Math.max(20, e.props.bodyColumns)
@@ -3422,13 +3571,36 @@ export const register: Register = (on, options) => {
     const frame = (body: unknown) => (
       <Box flexDirection="column">
         {header}
-        <TabBar el={el} tab={tab} onTab={next => setTab($, next)} />
+        <TabBar el={el} tab={tab} lens={lens} onTab={next => setTab($, next)} onLens={() => toggleLens($)} />
         {failedBefore}
         {jobView}
         {confirmView}
         {body as never}
       </Box>
     )
+
+    // ── pane seam: drill-down
+    // The scenario drill-down replaces any tab's body while open; Back closes it.
+    if (detail !== null) {
+      const evidence = await read($, evidenceAtom)
+
+      return frame(
+        <Box flexDirection="column">
+          <Text bold>
+            {detail.id} <Text dimColor>· run {detail.runId}</Text>
+          </Text>
+          {evidence === null ? <Text dimColor>reading its evidence…</Text> : <Text wrap="wrap">{evidence.summary}</Text>}
+          <Button key="detail-back" label="Back" hotkey="b" role="dismiss" onPress={() => closeDetail($)} />
+        </Box>,
+      )
+    }
+    // ── end pane seam: drill-down
+
+    // ── pane seam: trends
+    if (tab === 'trends') {
+      return frame(<Text dimColor>Trends: each scenario across recent runs.</Text>)
+    }
+    // ── end pane seam: trends
 
     // ── pane seam: runs tab
     if (tab === 'runs') {
