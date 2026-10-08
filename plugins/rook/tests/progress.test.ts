@@ -261,17 +261,17 @@ describe('progress · a generate and an explore in flight', () => {
       async () => {
         world.files.set(`${AGENT_DIR}/scenarios/SC-021.yaml`, 'id: SC-021\ntitle: Refund over the limit\nfeature_id: F-001\n')
         world.files.set(`${AGENT_DIR}/scenarios/SC-022.yaml`, 'id: SC-022\ntitle: Exactly the limit\nfeature_id: F-003\n')
-        await clock.advance(130_000)
+        await clock.advance(10_000)
       },
       look,
       ...GENERATE_END,
     ]
     const ran = (await $.tool.call({ tool: 'mcp__rook__generate', total: 7 } as never)) as Ran
 
-    expect(world.invocations.at(-1)).toEqual(['rook', 'generate', '--yes', '--json', '--total', '7'])
+    expect(world.invocations.at(-1)).toEqual(['rook', 'generate', '--yes', '--json', '--verbose', '--total', '7'])
     expect(seen[0]!.spinner).toBe('rook generate · 0s')
     expect(seen[0]!.pane).toContain('▸ rook generate · scenarios for commercecare · 0s')
-    expect(seen[1]!.spinner).toBe('rook generate · F-001 writing +1 · 2/7 · 2m10s')
+    expect(seen[1]!.spinner).toBe('rook generate · F-001 writing +1 · 2/7 · 10s')
     expect(seen[1]!.pane).toContain('2/7')
     expect(seen[1]!.pane).toContain('F-001 · writing 1/4')
     expect(seen[1]!.pane).toContain('F-003 · done 1/1')
@@ -314,7 +314,7 @@ describe('progress · a generate and an explore in flight', () => {
     fake.script = () => [...EXPLORE_LINES.slice(0, 4), async () => void seen.push(await spinnerText($)), async () => void seen.push(await paneText($)), EXPLORE_LINES[4]!, '1 analysed, 1 unchanged, 2.10 credits']
     const ran = (await $.tool.call({ tool: 'mcp__rook__explore' } as never)) as Ran
 
-    expect(world.invocations.at(-1)).toEqual(['rook', 'explore', '.', '--yes', '--json'])
+    expect(world.invocations.at(-1)).toEqual(['rook', 'explore', '.', '--yes', '--json', '--verbose'])
     expect(seen[0]).toBe('rook explore · scan finding agents +1 · 0s')
     expect(seen[1]).toContain('▸ rook explore · this repository · 0s')
     expect(seen[1]).toContain('commercecare · extracting features')

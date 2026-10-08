@@ -94,12 +94,11 @@ import {
   runsText,
   scenariosText,
   spinnerText,
-  staleLine,
   statusText,
   unlooked,
 } from './format'
 import { assess, declaredVariables, isRunCommand } from './guard'
-import { impactOf, indexAgent, relativeTo } from './impact'
+import { indexAgent, relativeTo } from './impact'
 import { authOf, blockedText, blockerOf, checklistText, diskFacts, learned, NEEDS, readinessOf, setupLine, versionOf } from './readiness'
 import type { CliFacts } from './readiness'
 import type { AgentIndex } from './impact'
@@ -246,6 +245,7 @@ const EDIT_TOOLS = /^(Edit|Write|MultiEdit|NotebookEdit)$/
 
 const USAGE = [
   '/rook                 open the live verdict pane',
+  '/rook tab health|runs|scenarios|setup   open the pane on a tab',
   '/rook status          agents, scenarios and sync state',
   '/rook scenarios       every scenario with its latest verdict',
   '/rook runs [N]        the agent\'s runs on disk, newest first (default 20)',
@@ -261,6 +261,12 @@ const USAGE = [
   '/rook project [list|use <id>|create <name>]  the rook project this workspace records to',
   "/rook explore [--force] [-- <instruction>]   read this repository: find the agents, write their features",
   '/rook profile [list|use <id>|test [id] [-- <goal>]]  how rook reaches the agent (add one: ! rook profile add …)',
+  '/rook compare [base] [head]  what changed between two runs, per scenario (default: the two newest finished runs)',
+  '/rook flaky SC-001 [N]   re-run one scenario N times in a row (default 3, 2-10) and say whether the verdicts disagree',
+  '          (spends credits each run)',
+  '/rook sync            record this project upstream (rook sync): every agent, one write. No credits',
+  '/rook budget [<credits>|off|status]   cap what runs and generates may spend this session',
+  '/rook ci [write] [--force] [--strict]   preview (or write) .github/workflows/rook.yml: rook as a pull-request check',
   '/rook ui              open the on-disk results viewer (rook ui --local)',
   '/rook confirm-prod [profile]  allow runs against a production-looking target for 15 minutes',
   '',
@@ -2835,8 +2841,10 @@ export const register: Register = (on, options) => {
 
     await $.command.register({
       name: 'rook',
-      description: 'rook agent testing: pane, status, runs, scenarios, agent, report, explain, run, generate, project, explore, profile, ui, confirm-prod',
-      argumentHint: '[pane|status|runs|scenarios [exclude|include]|agent [use]|report|explain [--rca]|run|generate|project|explore|profile|ui|confirm-prod|help]',
+      description:
+        'rook agent testing: pane, tab, status, runs, compare, scenarios, flaky, agent, report, explain, run, generate, project, explore, profile, sync, budget, ci, ui, confirm-prod',
+      argumentHint:
+        '[pane|tab <name>|status|runs|compare|scenarios [exclude|include]|flaky <id>|agent [use]|report|explain [--rca]|run|generate|project|explore|profile|sync|budget|ci|ui|confirm-prod|help]',
     })
     await $.tool.register({
       name: 'run',

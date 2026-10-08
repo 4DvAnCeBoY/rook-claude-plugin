@@ -293,7 +293,7 @@ describe('1 · tools Claude calls', () => {
     })
     const ran = (await $.tool.call({ tool: 'mcp__rook__generate', total: 5, instruction: 'the returns flow' } as never)) as Ran
 
-    expect(world.invocations.at(-1)).toEqual(['rook', 'generate', '--yes', '--json', '--total', '5', '--', 'the returns flow'])
+    expect(world.invocations.at(-1)).toEqual(['rook', 'generate', '--yes', '--json', '--verbose', '--total', '5', '--', 'the returns flow'])
     expect(asText(ran)).toContain('1 scenario file written')
 
     const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE.props, requestId: 'rook', viewport: PANE.viewport })
@@ -537,7 +537,7 @@ describe('6 · /rook', () => {
     world.onRun = () => ({ code: 0, stdout: JSON.stringify({ written: [], skipped: ['F-001'], declined: [], gaps: [], credits: 0, summaries: [] }) })
     expect((await $.command.run(command('generate --total 3 -- refunds'))).text).toContain('in the background')
     await clock.advance(10)
-    expect(world.invocations.at(-1)).toEqual(['rook', 'generate', '--yes', '--json', '--total', '3', '--', 'refunds'])
+    expect(world.invocations.at(-1)).toEqual(['rook', 'generate', '--yes', '--json', '--verbose', '--total', '3', '--', 'refunds'])
     expect(world.toasts.at(-1)).toContain('1 feature already covered')
 
     world.onRun = () => ({ code: 0, stdout: 'http://127.0.0.1:5000/\n' })
@@ -769,7 +769,7 @@ describe('setup from inside Claude Code', () => {
     })
     const ran = (await $.tool.call({ tool: 'mcp__rook__explore', instruction: 'the commerce agent' } as never)) as Ran
 
-    expect(world.invocations.at(-1)).toEqual(['rook', 'explore', '.', '--yes', '--json', '--', 'the commerce agent'])
+    expect(world.invocations.at(-1)).toEqual(['rook', 'explore', '.', '--yes', '--json', '--verbose', '--', 'the commerce agent'])
     expect(asText(ran)).toContain('rook explore: 1 agent — 1 analysed, 0 unchanged, 2.10 credits')
     expect(asText(ran)).toContain('commercecare — 4 features · 1 findings (worst low)')
     expect(asText(ran)).toContain('rook generate tool')
@@ -835,7 +835,7 @@ describe('setup from inside Claude Code', () => {
     world.onRun = () => ({ code: 0, stdout: '1 analysed, 0 unchanged, 1.00 credits\n' })
     expect((await $.command.run(command('explore --force -- the refunds bot'))).text).toContain('in the background')
     await clock.advance(10)
-    expect(world.invocations.at(-1)).toEqual(['rook', 'explore', '.', '--yes', '--json', '--force', '--', 'the refunds bot'])
+    expect(world.invocations.at(-1)).toEqual(['rook', 'explore', '.', '--yes', '--json', '--verbose', '--force', '--', 'the refunds bot'])
     expect(world.toasts.at(-1)).toContain('1 analysed')
 
     expect((await $.command.run(command('profile'))).text).toContain('! rook profile add')

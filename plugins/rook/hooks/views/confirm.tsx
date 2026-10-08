@@ -11,7 +11,7 @@ export function ConfirmBar(props: { el: El; confirm: RookConfirm; onConfirm: () 
     <Box flexDirection="column">
       <Text color="yellow" wrap="wrap">
         ◆ {confirm.label} · {cost}
-        {confirm.action === 'run' ? ' · calls your agent for real' : ''}
+        {confirm.action === 'generate' ? '' : ' · calls your agent for real'}
       </Text>
       <Box flexDirection="row" gap={1}>
         <Button key="confirm-yes" label="Confirm" variant="primary" hotkey="y" onPress={props.onConfirm} />

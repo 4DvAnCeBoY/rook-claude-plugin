@@ -357,12 +357,12 @@ describe('rook CLI', () => {
 
     expect(approval.allowRules).toEqual(['bash(npm test)', 'bash(git *)@explore'])
     expect(runArgs({}, approval)).toEqual({ argv: ['run', '--allow', 'bash(npm test)', '--allow', 'bash(git *)@explore', '--json'] })
-    expect(generateArgs({}, approval)).toEqual({ argv: ['generate', '--allow', 'bash(npm test)', '--allow', 'bash(git *)@explore', '--json'] })
+    expect(generateArgs({}, approval)).toEqual({ argv: ['generate', '--allow', 'bash(npm test)', '--allow', 'bash(git *)@explore', '--json', '--verbose'] })
   })
 
   test('generate flags are validated too', () => {
     expect(generateArgs({ total: 20, classes: ['adversarial', 'functional'], categories: ['prompt_injection'], force: true, instruction: 'the returns flow' })).toEqual({
-      argv: ['generate', '--yes', '--json', '--total', '20', '--class', 'adversarial,functional', '--category', 'prompt_injection', '--force', '--', 'the returns flow'],
+      argv: ['generate', '--yes', '--json', '--verbose', '--total', '20', '--class', 'adversarial,functional', '--category', 'prompt_injection', '--force', '--', 'the returns flow'],
     })
     expect(generateArgs({ total: 0 })).toHaveProperty('error')
     expect(generateArgs({ categories: ['--yes'] })).toHaveProperty('error')
@@ -385,9 +385,9 @@ describe('rook CLI', () => {
   })
 
   test('explore: rook explore . with the approvals, --force, and the instruction after --', () => {
-    expect(exploreArgs({})).toEqual({ argv: ['explore', '.', '--yes', '--json'] })
+    expect(exploreArgs({})).toEqual({ argv: ['explore', '.', '--yes', '--json', '--verbose'] })
     expect(exploreArgs({ force: true, instruction: 'the bot under --services' }, { allowRules: ['bash(git *)'] })).toEqual({
-      argv: ['explore', '.', '--allow', 'bash(git *)', '--json', '--force', '--', 'the bot under --services'],
+      argv: ['explore', '.', '--allow', 'bash(git *)', '--json', '--verbose', '--force', '--', 'the bot under --services'],
     })
     expect(exploreArgs({ instruction: 'a\u0000b' })).toHaveProperty('error')
     expect(parseExploreFlags('--force -- the support bot')).toEqual({ force: true, instruction: 'the support bot' })
