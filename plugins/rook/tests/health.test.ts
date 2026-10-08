@@ -154,6 +154,34 @@ describe('health · the pane', () => {
 })
 
 describe('health · cancel', () => {
+  test('a cancelled run rook left unfinished shows as stopped, not running, and is not reported as finished', async ($, on) => {
+    const { world, clock } = await start($, on, workspace())
+    const ui = await mountPane($)
+    let release = () => undefined as void
+    const gate = new Promise<void>(resolve => {
+      release = resolve
+    })
+
+    world.onRun = () => ({ code: 130, stdout: '' })
+    world.during = () => gate
+
+    await ui.press({ key: 'rerun-failed' })
+    await ui.press({ key: 'confirm-yes' })
+    const advancing = clock.advance(10)
+
+    // rook has started writing the run when the person cancels it.
+    world.files.set(`${AGENT_DIR}/runs/${FRESH}/run.yaml`, runYaml(FRESH, 'x', ['SC-004']))
+    await clock.advance(3_100)
+    await ui.press({ key: 'cancel-run' })
+    await advancing
+    await clock.advance(3_100)
+
+    expect(await ui.find({ text: /0\/1 stopped/ })).toBeDefined()
+    expect(await ui.find({ text: /running/ })).toBeUndefined()
+    expect(world.toasts.filter(t => t.includes('finished'))).toEqual([])
+    release()
+  })
+
   test('Cancel on a pane run ends the rook child, clears the run and says so', async ($, on) => {
     const { world, clock } = await start($, on, workspace())
     const ui = await mountPane($)
@@ -173,7 +201,7 @@ describe('health · cancel', () => {
     await ui.press({ key: 'cancel-run' })
     await advancing
 
-    expect(world.toasts).toContain('rook: run cancelled')
+    expect(world.toasts).toContain('run cancelled')
     expect(await ui.find({ key: 'running' })).toBeUndefined()
     expect(await ui.find({ key: 'last-error' })).toBeUndefined()
     expect(await ui.find({ key: 'run-all' })).toBeDefined() // free to run again
@@ -195,7 +223,7 @@ describe('health · cancel', () => {
     expect(await ui.find({ key: 'cancel-run' })).toBeDefined()
     await ui.press({ key: 'cancel-run' })
     await advancing
-    expect(world.toasts).toContain('rook: run cancelled')
+    expect(world.toasts).toContain('run cancelled')
     release()
 
     // Claude's run: the pane shows it running, with no Cancel (the turn's own interrupt ends it).

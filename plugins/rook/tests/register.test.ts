@@ -434,7 +434,7 @@ describe('4 · failures of a run started elsewhere', () => {
     // Reported once, however many polls pass. The failure notes themselves go
     // through $.session.append, which the kit does not route to a test's
     // hooks: their text is held in logic.test.ts, the append in a live session.
-    expect(world.toasts).toEqual([`rook: run ${FRESH_RUN} finished — 0 Pass · 1 Fail · 0 Unable to Verify`])
+    expect(world.toasts).toEqual([`run ${FRESH_RUN} finished — 0 Pass · 1 Fail · 0 Unable to Verify`])
     // a one-scenario run moves one row: the agent is still 1 / 1 / 1, not "down one"
     expect(world.statuses.at(-1)).toBe('✓1 ✗1 ?1 ▁▅▁')
   })
@@ -458,7 +458,7 @@ describe('4 · failures of a run started elsewhere', () => {
     world.files.set(`${AGENT_DIR}/runs/${FRESH_RUN}/report.yaml`, reportYaml(FRESH_RUN, 0, 1, 0, 2))
     await clock.advance(3_000)
 
-    expect(world.toasts).toEqual([`rook: run ${FRESH_RUN} finished — 0 Pass · 1 Fail · 0 Unable to Verify`])
+    expect(world.toasts).toEqual([`run ${FRESH_RUN} finished — 0 Pass · 1 Fail · 0 Unable to Verify`])
   })
 
   test('with failure context off, it is still toasted', { options: { failureContext: false } }, async ($, on) => {

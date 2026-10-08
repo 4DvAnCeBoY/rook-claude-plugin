@@ -7,7 +7,8 @@ import { flakyText } from '../hooks/scenarios'
 import { changedSources, sourceStamps } from '../hooks/sources'
 import type { Io } from '../hooks/workspace'
 import { BAND, SESSION, worldOf } from './fixtures/world'
-import { workspace } from './fixtures/workspace'
+import { AGENT_DIR, runYaml, workspace } from './fixtures/workspace'
+import { command } from './fixtures/world'
 
 /**
  * Fixes from a live test of 0.2.0 in a real Claude Code session against a
@@ -106,5 +107,23 @@ describe('live timers', () => {
   test('whole seconds under a minute, then minutes', () => {
     expect(elapsed(35_900)).toBe('35s')
     expect(elapsed(125_000)).toBe('2m05s')
+  })
+})
+
+describe('budget · priced while the newest run has no credits', () => {
+  test('an unfinished or cancelled newest run does not let a run past the budget', async ($: Engine, on) => {
+    const files = { ...workspace(), [`${AGENT_DIR}/runs/2026-09-28T16-00-00Z/run.yaml`]: runYaml('2026-09-28T16-00-00Z', 'cut off', ['SC-004']) }
+    const world = worldOf(on, files)
+    const clock = mock.clock(on, { now: 1_000_000 })
+
+    on('tool.call', () => ({ result: 'ok' }) as never)
+    await $.session.start(SESSION)
+    await clock.advance(3_100)
+
+    expect((await $.command.run(command('budget 5'))).text).toContain('budget 5 credits')
+    const refused = (await $.command.run(command('run'))).text
+
+    expect(refused).toContain('was not started')
+    expect(world.invocations.filter(argv => argv[1] === 'run')).toEqual([])
   })
 })

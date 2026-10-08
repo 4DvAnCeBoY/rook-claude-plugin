@@ -302,6 +302,8 @@ type Ctx = {
   cli: CliFacts
   /** The agent's runs list as the Runs tab last read it, to skip re-reading when nothing changed. */
   historySignature?: string
+  /** Runs the person cancelled: shown as stopped, not as running, though rook left them unfinished. */
+  cancelled?: Set<string>
   /** Modification times of the agent's tracked sources at the last poll, keyed by agent directory. */
   sourceStamps?: { agentDir: string; stamps: Map<string, number> }
   /** The status line's recent finished runs, re-read only when the runs on disk change. */
@@ -310,6 +312,11 @@ type Ctx = {
   runAbort?: AbortController
   /** The agent's scenario files as last read for the Scenarios tab, keyed by agent directory and index signature. */
   scenarioList?: { key: string; list: ScenarioInfo[] }
+}
+
+/** Claude Code labels a plugin's toast with its name: drop rook's own prefix so it reads once. */
+function toastText(text: string): string {
+  return text.replace(/^rook:\s*/, '')
 }
 
 function textOption(value: unknown, fallback: string): string {
@@ -556,7 +563,8 @@ async function poll($: EngineInterface, ctx: Ctx): Promise<void> {
 
     ctx.isDirty = false
 
-    const latest = latestId === undefined ? undefined : await readRun(io, loc.agentDir, latestId, ctx.rows)
+    const read0 = latestId === undefined ? undefined : await readRun(io, loc.agentDir, latestId, ctx.rows)
+    const latest = read0 === undefined ? undefined : await liveOrStopped($, ctx, loc, read0)
     const index = ctx.agentIndex ?? (await indexAgent(io, loc.agentDir))
     ctx.agentIndex = index
     const current = await currentVerdicts(io, loc.agentDir, ids, ctx.rows, new Set(index.scenarios.map(scenario => scenario.id)))
@@ -584,7 +592,7 @@ async function poll($: EngineInterface, ctx: Ctx): Promise<void> {
       await update($, tickAtom, () => snapshot.checkedAt)
     }
 
-    if (latest?.finished) {
+    if (latest?.finished && latest.stopped !== true) {
       // An agent seen for the first time (a workspace that appeared, `rook agent
       // use`) brings its history with it: its latest run is not news.
       await finished($, ctx, loc, latest, before?.agentId !== loc.agentId)
@@ -618,7 +626,7 @@ async function finished($: EngineInterface, ctx: Ctx, loc: Located, run: RookRun
   }
 
   const { pass, fail, unverifiable } = run.counts
-  $.ui.toast(`rook: run ${run.runId} finished — ${pass} Pass · ${fail} Fail · ${unverifiable} Unable to Verify`)
+  $.ui.toast(toastText(`rook: run ${run.runId} finished — ${pass} Pass · ${fail} Fail · ${unverifiable} Unable to Verify`))
 
   if (ctx.isFailureContext && fail > 0) {
     const text = `<rook-run-result>\n${failureContext(run, loc.agentDir, loc.agentId)}\n</rook-run-result>`
@@ -719,7 +727,7 @@ async function backgroundRun($: EngineInterface, ctx: Ctx, argv: string[], signa
     const problem = failureOf(result)
 
     if (signal?.aborted) {
-      $.ui.toast('rook: run cancelled')
+      $.ui.toast(toastText('rook: run cancelled'))
     } else if (problem !== undefined) {
       // A toast vanishes; the pane keeps the failure until the next run starts.
       const text = await explained($, ctx, result, `run failed: ${problem}`, NEEDS.run, 'run')
@@ -727,7 +735,7 @@ async function backgroundRun($: EngineInterface, ctx: Ctx, argv: string[], signa
       const at = await $.clock.now()
 
       await update($, lastErrorAtom, () => ({ source: 'run', text, at }))
-      $.ui.toast(`rook: ${clip(text, 200)}`)
+      $.ui.toast(toastText(`rook: ${clip(text, 200)}`))
     }
   } catch (error) {
     const text = `could not start ${ctx.bin} — ${clip(String(error), 120)}`
@@ -735,7 +743,7 @@ async function backgroundRun($: EngineInterface, ctx: Ctx, argv: string[], signa
     const at = await $.clock.now()
 
     await update($, lastErrorAtom, () => ({ source: 'run', text, at }))
-    $.ui.toast(`rook: ${text}`)
+    $.ui.toast(toastText(`rook: ${text}`))
   } finally {
     if (signal !== undefined && ctx.runAbort?.signal === signal) {
       ctx.runAbort = undefined
@@ -1189,7 +1197,7 @@ async function retest($: EngineInterface): Promise<void> {
   const unticked = await read($, untickedAtom)
 
   if (stale !== null && stale.scenarios.length > 0 && tickedOf(stale, unticked).length === 0) {
-    $.ui.toast('rook: tick at least one scenario to re-test')
+    $.ui.toast(toastText('rook: tick at least one scenario to re-test'))
 
     return
   }
@@ -1213,11 +1221,11 @@ async function backgroundGenerate($: EngineInterface, ctx: Ctx, request: Generat
     await update($, lastErrorAtom, () => ({ source: 'generate', text: text.replace(/^rook(?::\s*|\s+)/, ''), at }))
   }
 
-  $.ui.toast(clip(text, 300))
+  $.ui.toast(toastText(clip(text, 300)))
 }
 
 async function paneRun($: EngineInterface, ctx: Ctx, request: RunRequest): Promise<void> {
-  $.ui.toast(await startRun($, ctx, request, 'pane'))
+  $.ui.toast(toastText(await startRun($, ctx, request, 'pane')))
 }
 
 async function probeThenPoll($: EngineInterface, ctx: Ctx): Promise<void> {
@@ -1333,7 +1341,7 @@ async function rookCommand($: EngineInterface, ctx: Ctx, e: CommandRunInput): Pr
         return { text: unready }
       }
 
-      $.clock.after(0, async () => $.ui.toast(clip(await exploreRun($, ctx, request, undefined, 'background').catch(error => `rook explore failed: ${String(error)}`), 300)))
+      $.clock.after(0, async () => $.ui.toast(toastText(clip(await exploreRun($, ctx, request, undefined, 'background').catch(error => `rook explore failed: ${String(error)}`), 300))))
 
       return { text: 'rook: exploring this repository in the background (minutes, spends credits). A toast says what it found; the pane picks the agent up.' }
     }
@@ -1371,7 +1379,7 @@ async function rookCommand($: EngineInterface, ctx: Ctx, e: CommandRunInput): Pr
       $.clock.after(0, async () => {
         const answer = await profileReply($, ctx, request).catch(error => ({ deny: `rook profile test failed: ${String(error)}` }))
 
-        $.ui.toast(clip('deny' in answer ? answer.deny : answer.result, 300))
+        $.ui.toast(toastText(clip('deny' in answer ? answer.deny : answer.result, 300)))
       })
 
       return { text: `rook: testing ${request.profile ?? 'the active profile'} in the background: one call to the agent. A toast says what came back.` }
@@ -1699,7 +1707,7 @@ async function startExplain($: EngineInterface, ctx: Ctx, runRef: string | undef
 async function backgroundExplain($: EngineInterface, ctx: Ctx, runId: string, isHandedOver: boolean): Promise<void> {
   const answer = await explainRca($, ctx, runId).catch(error => ({ text: `rook report --rca failed: ${String(error)}`, context: undefined }))
 
-  $.ui.toast(clip(answer.text.split('\n')[0] ?? '', 200))
+  $.ui.toast(toastText(clip(answer.text.split('\n')[0] ?? '', 200)))
 
   if (isHandedOver && answer.context !== undefined) {
     const text = `<rook-run-result>\n${answer.context}\n</rook-run-result>`
@@ -1709,7 +1717,7 @@ async function backgroundExplain($: EngineInterface, ctx: Ctx, runId: string, is
 }
 
 async function paneExplain($: EngineInterface, ctx: Ctx, runId: string): Promise<void> {
-  $.ui.toast(await startExplain($, ctx, runId, false))
+  $.ui.toast(toastText(await startExplain($, ctx, runId, false)))
 }
 
 /** `rook agent` (prose: `* id  name`), or the agent directories on disk when rook cannot answer. */
@@ -1769,7 +1777,7 @@ async function switchAgent($: EngineInterface, ctx: Ctx, id: string | undefined)
 }
 
 async function paneSwitch($: EngineInterface, ctx: Ctx, id: string): Promise<void> {
-  $.ui.toast(await switchAgent($, ctx, id))
+  $.ui.toast(toastText(await switchAgent($, ctx, id)))
 }
 
 /** `rook scenarios exclude|include <ids> --json`; the scenario set is re-read after. */
@@ -1820,10 +1828,10 @@ async function confirmNow($: EngineInterface, ctx: Ctx): Promise<void> {
       ...(confirm.force === true && { force: true }),
     }
 
-    $.ui.toast('rook: generating scenarios in the background.')
+    $.ui.toast(toastText('rook: generating scenarios in the background.'))
     $.clock.after(0, () => backgroundGenerate($, ctx, request))
   } else if (confirm?.action === 'flaky') {
-    $.ui.toast(await flakyStart($, ctx, confirm.id, confirm.times, 'pane'))
+    $.ui.toast(toastText(await flakyStart($, ctx, confirm.id, confirm.times, 'pane')))
   } else if (confirm?.action === 'profile-test') {
     await paneProfileTest($, ctx, confirm.profile)
   }
@@ -1932,11 +1940,46 @@ function jobLabel(ctx: Ctx, kind: RookJob['kind'], instruction: string | undefin
 // ══ feature: health (Unable to Verify fixer, cancel, run confirm) ════════════
 
 /** The pane's Cancel on a run the person started: the child ends, backgroundRun clears the rest and says so. */
+/** Nothing has written to an unfinished run for this long: rook is not running it any more. */
+const STOPPED_MS = 10 * 60_000
+
+/**
+ * An unfinished run this session is not running is over when the person
+ * cancelled it, or when nothing has written to its folder for STOPPED_MS
+ * (rook was killed: a quit, a crash). A run in another terminal keeps writing,
+ * so it stays live. An unknown time (0) is never taken as idle.
+ */
+async function liveOrStopped($: EngineInterface, ctx: Ctx, loc: Located, run: RookRunView): Promise<RookRunView> {
+  if (run.finished || (await read($, runningAtom)) !== null) {
+    return run
+  }
+
+  const stopped: RookRunView = { ...run, finished: true, stopped: true, lanes: [] }
+
+  if (ctx.cancelled?.has(run.runId)) {
+    return stopped
+  }
+
+  const io = ioOf($, ctx)
+  const dir = `${loc.agentDir}/runs/${run.runId}`
+  const times = [...(await io.list(dir)), ...(await io.list(`${dir}/scenarios`))].map(entry => entry.mtimeMs ?? 0)
+  const newest = Math.max(0, ...times)
+
+  return newest > 0 && (await $.clock.now()) - newest > STOPPED_MS ? stopped : run
+}
+
 async function cancelRun($: EngineInterface, ctx: Ctx): Promise<void> {
   const running = await read($, runningAtom)
 
   if (running === null || running.source === 'tool') {
     return
+  }
+
+  // rook leaves the run folder unfinished: remember it, so the pane says stopped rather than running.
+  const inFlight = (await read($, snapshotAtom))?.latest
+
+  if (inFlight !== undefined && !inFlight.finished) {
+    ;(ctx.cancelled ??= new Set()).add(inFlight.runId)
   }
 
   if (ctx.runAbort !== undefined) {
@@ -1947,7 +1990,7 @@ async function cancelRun($: EngineInterface, ctx: Ctx): Promise<void> {
 
   // Nothing of this load is running it (a reload ended the child): clear what says it is.
   await update($, runningAtom, () => null)
-  $.ui.toast('rook: run cancelled')
+  $.ui.toast(toastText('rook: run cancelled'))
 }
 
 /** One group of "what nobody looked at" handed to Claude: make the evidence observable, keep the criteria. */
@@ -2069,7 +2112,7 @@ async function openRun($: EngineInterface, ctx: Ctx, runId: string): Promise<voi
   const run = loc === undefined ? undefined : await readRun(ioOf($, ctx), loc.agentDir, runId, ctx.rows)
 
   if (run === undefined) {
-    $.ui.toast(`rook: run ${runId} could not be read.`)
+    $.ui.toast(toastText(`rook: run ${runId} could not be read.`))
 
     return
   }
@@ -2135,7 +2178,7 @@ async function pickRun($: EngineInterface, ctx: Ctx, runId: string): Promise<voi
   const diff = loc === undefined ? { error: 'no agent here.' } : await diffOf($, ctx, loc, base, head)
 
   if ('error' in diff) {
-    $.ui.toast(`rook: ${diff.error}`)
+    $.ui.toast(toastText(`rook: ${diff.error}`))
 
     return
   }
@@ -2224,7 +2267,7 @@ async function scenarioCurate($: EngineInterface, ctx: Ctx, verb: 'exclude' | 'i
 
   ctx.scenarioList = undefined // the files changed under the same names
   await update($, selectedAtom, () => [])
-  $.ui.toast(text.startsWith('rook') ? text : `rook: ${text}`)
+  $.ui.toast(toastText(text.startsWith('rook') ? text : `rook: ${text}`))
 }
 
 /** One failing scenario handed to Claude, whichever run its newest verdict is from. */
@@ -2284,7 +2327,7 @@ async function scenarioGenerate($: EngineInterface, text?: string): Promise<void
   const instruction = (text ?? (await read($, draftAtom))).trim()
 
   if (instruction === '') {
-    $.ui.toast('rook: type what the new scenarios should cover first.')
+    $.ui.toast(toastText('rook: type what the new scenarios should cover first.'))
 
     return
   }
@@ -2385,7 +2428,7 @@ async function flakyLoop($: EngineInterface, ctx: Ctx, id: string, times: number
     await update($, lastErrorAtom, () => ({ source: 'run', text: `flaky check of ${id}: ${clip(problem!, 400)}`, at }))
   }
 
-  $.ui.toast(`rook: ${flakyText(id, verdicts, times, prior)}`)
+  $.ui.toast(toastText(`rook: ${flakyText(id, verdicts, times, prior)}`))
 }
 
 /** `/rook flaky <id> [times]`. */
@@ -2420,7 +2463,9 @@ async function budgetBlock($: EngineInterface, ctx: Ctx, kind: 'run' | 'generate
   }
 
   const latest = (await read($, snapshotAtom))?.latest
-  const rate = creditsPerScenario(latest)
+  // A cancelled or running latest run has no credits yet: price it at the newest finished run's rate.
+  const recent = (await read($, historyAtom))?.find(run => run.credits !== undefined && run.planned > 0)
+  const rate = creditsPerScenario(latest) ?? (recent === undefined ? undefined : recent.credits! / recent.planned)
   const planned = count ?? ctx.agentIndex?.scenarios.length ?? latest?.planned
   const estimate =
     kind === 'generate' ? GENERATE_ESTIMATE : rate !== undefined && planned !== undefined && planned > 0 ? rate * planned : latest?.finished ? latest.credits : undefined
@@ -2555,7 +2600,7 @@ async function syncReply($: EngineInterface, ctx: Ctx, agent?: string): Promise<
 }
 
 async function paneSync($: EngineInterface, ctx: Ctx): Promise<void> {
-  $.ui.toast(clip(await syncReply($, ctx), 300))
+  $.ui.toast(toastText(clip(await syncReply($, ctx), 300)))
 }
 
 async function paneCheckSync($: EngineInterface, ctx: Ctx): Promise<void> {
@@ -2565,7 +2610,7 @@ async function paneCheckSync($: EngineInterface, ctx: Ctx): Promise<void> {
 async function paneUseProfile($: EngineInterface, ctx: Ctx, id: string): Promise<void> {
   const answer = await profileReply($, ctx, { action: 'use', profile: id })
 
-  $.ui.toast(clip('deny' in answer ? answer.deny : answer.result, 200))
+  $.ui.toast(toastText(clip('deny' in answer ? answer.deny : answer.result, 200)))
 }
 
 /** The Setup tab's Test: one call to the agent spends credits, so it waits behind the Confirm bar. */
@@ -2577,11 +2622,11 @@ async function askProfileTest($: EngineInterface, id: string): Promise<void> {
 async function paneProfileTest($: EngineInterface, ctx: Ctx, profile: string | undefined): Promise<void> {
   const request: ProfileRequest = { action: 'test', ...(profile !== undefined && { profile }) }
 
-  $.ui.toast(`rook: testing ${profile ?? 'the active profile'}: one call to the agent. A toast says what came back.`)
+  $.ui.toast(toastText(`rook: testing ${profile ?? 'the active profile'}: one call to the agent. A toast says what came back.`))
   $.clock.after(0, async () => {
     const answer = await profileReply($, ctx, request).catch(error => ({ deny: `rook profile test failed: ${String(error)}` }))
 
-    $.ui.toast(clip('deny' in answer ? answer.deny : answer.result, 300))
+    $.ui.toast(toastText(clip('deny' in answer ? answer.deny : answer.result, 300)))
   })
 }
 
@@ -3617,7 +3662,7 @@ export const register: Register = (on, options) => {
         )}
         {run !== undefined && (
           <Text>
-            {progressBar(run.done, run.planned, Math.min(30, width - 16))} {run.done}/{run.planned} {run.finished ? 'done' : isReporting(run) ? REPORTING : 'running'}
+            {progressBar(run.done, run.planned, Math.min(30, width - 16))} {run.done}/{run.planned} {run.stopped ? 'stopped' : run.finished ? 'done' : isReporting(run) ? REPORTING : 'running'}
           </Text>
         )}
         {run !== undefined && (
@@ -3751,7 +3796,7 @@ export const register: Register = (on, options) => {
             <Button key="fix" label="Fix with Claude" variant="primary" hotkey="x" onPress={() => fixWithClaude($, ctx, run)} />
           )}
           {viewerUrl === null && (
-            <Button key="viewer" label="Evidence viewer" hotkey="v" onPress={async () => $.ui.toast(await startViewer($, ctx))} />
+            <Button key="viewer" label="Evidence viewer" hotkey="v" onPress={async () => $.ui.toast(toastText(await startViewer($, ctx)))} />
           )}
         </Box>
         {viewerUrl !== null && (
