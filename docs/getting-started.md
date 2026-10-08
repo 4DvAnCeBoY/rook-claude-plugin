@@ -140,6 +140,14 @@ Open Claude Code in the repository. The plugin finds `.testmuai/rook/` and reads
 | Hand the failures to Claude | `/rook explain`, or open a cluster or failure in the pane and press **Fix this with Claude** |
 | See which scenarios exist | `/rook scenarios`. Leave one out of runs with `/rook scenarios exclude SC-007` |
 | Switch agent | The pane offers a switch when the project has more than one, or `/rook agent use <id>` |
+| See what changed between two runs | **Runs** tab → open a run → **Compare with…**, or `/rook compare` |
+| Run a handful of scenarios | **Scenarios** tab → filter, tick them, **Run selected** (you confirm the credit estimate first) |
+| Check whether a scenario is flaky | Open it in the **Scenarios** tab → **Re-run 3×**, or `/rook flaky SC-004` |
+| Turn a failure into a regression test | Open the failing scenario → **Turn into regression test**: Claude writes one with the generate tool |
+| Fix an "Unable to Verify" | **Health** tab → *What nobody looked at* → **Fix with Claude** on its group, then **Re-test these** |
+| Record the project upstream | **Setup** tab → **Sync upstream**, or `/rook sync` (no credits) |
+| Cap spending for this session | `/rook budget 50`; `/rook budget off` lifts it |
+| Run rook on every pull request | `/rook ci` to preview the workflow and the secrets it needs, `/rook ci write` to write it |
 | Read a request, response or evidence file | **Evidence viewer** in the pane, or `/rook ui` |
 
 ### Things the plugin handles for you

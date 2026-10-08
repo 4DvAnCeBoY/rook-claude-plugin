@@ -119,9 +119,12 @@ export type RookSnapshot = {
 
 export type RookStale = {
   files: string[]
-  scenarios: { id: string; title: string }[]
+  /** `why`: how the edit reaches it (a feature cites the file, an import, a tool name it shares). */
+  scenarios: { id: string; title: string; why?: string }[]
   /** True when no feature names the file: every scenario of the agent may be affected. */
   isWholeAgent: boolean
+  /** How the set was chosen when no feature cites the file (`shared code: matched 3 scenarios by tool names …`). */
+  reason?: string
   /** What re-testing them would cost at the latest run's credits per scenario. */
   estimate?: number
   since: number
@@ -134,6 +137,47 @@ export type RookRunning = {
 }
 
 export type RookProdConfirmation = { cwd: string; profile: string; until: number }
+
+/** The pane's tabs. */
+export type RookTab = 'health' | 'runs' | 'scenarios' | 'setup'
+
+/**
+ * Something that spends credits, waiting for the person's yes in the pane.
+ * Data only: the confirm button replays it.
+ */
+export type RookConfirm =
+  | { action: 'run'; only?: string[]; label: string; credits?: number }
+  | { action: 'generate'; instruction?: string; total?: number; force?: boolean; label: string; credits?: number }
+  /** Re-run one scenario `times` times in a row (flaky check). */
+  | { action: 'flaky'; id: string; times: number; label: string; credits?: number }
+  | { action: 'profile-test'; profile?: string; label: string; credits?: number }
+
+/** One step of a generate or explore in flight: a feature being planned, a scenario being written. */
+export type RookJobLane = { id: string; label: string; phase: string; since: number; planned?: number; done?: number }
+
+/** A generate or explore in flight, for the pane's lanes and the spinner. */
+export type RookJob = { kind: 'generate' | 'explore'; label: string; startedAt: number; lanes: RookJobLane[]; last?: string; done?: number; planned?: number; source?: 'tool' | 'background' }
+
+/** One finished run, for the Runs tab and the status line's trend. */
+export type RookRunSummary = {
+  runId: string
+  name?: string
+  created?: string
+  planned: number
+  counts: RookCounts
+  passRate?: number
+  credits?: number
+  durationMs?: number
+  isTest?: boolean
+}
+
+/** A per-session credit cap the mod enforces before run and generate. */
+export type RookBudget = {
+  limit: number
+  spent: number
+  /** The `rook plan` balance when the budget was set: spent is that minus the balance now. Absent when it could not be read. */
+  startBalance?: number
+}
 
 declare module 'claude-code' {
   interface PluginState {
@@ -160,6 +204,80 @@ declare module 'claude-code' {
       balance: number | null
       /** The run `rook report --rca` is explaining now. */
       explaining: string | null
+      /** The pane's open tab. */
+      tab: RookTab
+      /** A credit-spending action waiting for the person's yes. */
+      confirm: RookConfirm | null
+
+      // ── feature: progress (generate / explore lanes)
+      job: RookJob | null
+      // ── end feature: progress
+
+      // ── feature: health (Unable to Verify fixer, cancel, run confirm)
+      // ── end feature: health
+
+      // ── feature: runs tab (history, compare)
+      history: RookRunSummary[] | null
+      compare: string[]
+      /** The run the Runs tab opened, read from disk. */
+      runOpen: RookRunView | null
+      /** The two runs compareAtom holds, diffed scenario by scenario (hooks/history.ts `RunDiff`). */
+      runDiff: {
+        base: { runId: string; name?: string; counts: RookCounts; passRate?: number; credits?: number; durationMs?: number; finished: boolean }
+        head: { runId: string; name?: string; counts: RookCounts; passRate?: number; credits?: number; durationMs?: number; finished: boolean }
+        /** Fail or Unable to Verify in base, Pass in head. */
+        fixed: { id: string; title: string; base?: RookStatus; head?: RookStatus }[]
+        /** Pass in base, Fail or Unable to Verify in head. */
+        regressed: { id: string; title: string; base?: RookStatus; head?: RookStatus }[]
+        /** Judged in head only. */
+        added: { id: string; title: string; base?: RookStatus; head?: RookStatus }[]
+        /** Judged in base only. */
+        missing: { id: string; title: string; base?: RookStatus; head?: RookStatus }[]
+        /** Not Pass in both. */
+        stillFailing: { id: string; title: string; base?: RookStatus; head?: RookStatus }[]
+        /** Pass in both. */
+        stillPassing: number
+        delta: { pass: number; fail: number; unverifiable: number; passRate?: number; credits?: number }
+      } | null
+      // ── end feature: runs tab
+
+      // ── feature: scenarios tab (filter, select, detail, flaky, generate box)
+      selected: string[]
+      filter: string
+      draft: string
+      flaky: Record<string, RookStatus[]>
+      /** The scenario opened in the Scenarios tab. */
+      scenarioDetail: string | null
+      // ── end feature: scenarios tab
+
+      // ── feature: setup tab (profile wizard, sync, budget)
+      budget: RookBudget | null
+      /** `rook status --json` read back for the Setup tab, and the last `rook sync`; null until checked. */
+      sync: {
+        checkedAt: number
+        offline: boolean
+        agents: { id: string; tree: string; version?: number; upstream?: number; changes: string[]; owedRuns: number }[]
+        said?: string
+        error?: string
+        isSyncing?: boolean
+      } | null
+      // ── end feature: setup tab
+
+      // ── feature: band (precise re-test)
+      /** Scenario ids the person unticked in the re-test band: left out of Re-test. */
+      unticked: string[]
+      /** The band's Details list is open. */
+      isBandOpen: boolean
+      // ── end feature: band
+
+      // ── feature: status line
+      // ── end feature: status line
+
+      // ── feature: card (transcript verdict card)
+      // ── end feature: card
+
+      // ── feature: ci
+      // ── end feature: ci
     }
   }
 }

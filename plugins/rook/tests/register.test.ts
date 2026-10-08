@@ -42,7 +42,7 @@ describe('session start', () => {
     const { world } = await start($, on, workspace())
 
     expect(world.commands).toEqual(['rook'])
-    expect(world.tools.sort()).toEqual(['agent', 'curate', 'explore', 'generate', 'profile_test', 'project', 'report', 'run', 'runs', 'scenarios', 'status'])
+    expect(world.tools.sort()).toEqual(['agent', 'ci', 'compare', 'curate', 'explore', 'generate', 'profile_test', 'project', 'report', 'run', 'runs', 'scenarios', 'status', 'sync'])
     expect(world.opened).toEqual(['rook'])
     expect(world.statuses.at(-1)).toBe('✓1 ✗1 ?1 · 2 gaps · ↑1 fixed')
   })
@@ -128,7 +128,7 @@ describe('2 · the pane', () => {
 
     expect(await ui.find({ text: /2\/3 running/ })).toBeDefined()
     expect((await ui.find({ key: 'l-SC-007' }))?.text).toContain('starting')
-    expect(world.statuses.at(-1)).toBe('▸ 2/3 · SC-007 starting · ✓1 ✗1 ?0')
+    expect(world.statuses.at(-1)).toBe('▸ 2/3 · SC-007 starting · <1m left · ✓1 ✗1 ?0')
   })
 
   test('a Fail from an earlier run that the latest run did not cover stays visible, and Re-run failed includes it', async ($, on) => {
@@ -147,6 +147,7 @@ describe('2 · the pane', () => {
 
     freshRun(world, { 'SC-004': VERDICT_PASS_GAP.replace('SC-002', 'SC-004') }, [1, 0, 0])
     await ui.press({ key: 'rerun-failed' })
+    await ui.press({ key: 'confirm-yes' })
     await clock.advance(10)
 
     expect(world.invocations.at(-1)).toEqual(['rook', 'run', '--yes', '--json', '--only', 'SC-004'])
@@ -201,6 +202,7 @@ describe('2 · the pane', () => {
 
     freshRun(world, { 'SC-004': VERDICT_PASS_GAP.replace('SC-002', 'SC-004') }, [1, 0, 0])
     await ui.press({ key: 'rerun-failed' })
+    await ui.press({ key: 'confirm-yes' })
     await clock.advance(10)
 
     expect(world.invocations.at(-1)).toEqual(['rook', 'run', '--yes', '--json', '--only', 'SC-004'])
@@ -291,7 +293,7 @@ describe('1 · tools Claude calls', () => {
     })
     const ran = (await $.tool.call({ tool: 'mcp__rook__generate', total: 5, instruction: 'the returns flow' } as never)) as Ran
 
-    expect(world.invocations.at(-1)).toEqual(['rook', 'generate', '--yes', '--json', '--total', '5', '--', 'the returns flow'])
+    expect(world.invocations.at(-1)).toEqual(['rook', 'generate', '--yes', '--json', '--verbose', '--total', '5', '--', 'the returns flow'])
     expect(asText(ran)).toContain('1 scenario file written')
 
     const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', props: PANE.props, requestId: 'rook', viewport: PANE.viewport })
@@ -434,7 +436,7 @@ describe('4 · failures of a run started elsewhere', () => {
     // hooks: their text is held in logic.test.ts, the append in a live session.
     expect(world.toasts).toEqual([`rook: run ${FRESH_RUN} finished — 0 Pass · 1 Fail · 0 Unable to Verify`])
     // a one-scenario run moves one row: the agent is still 1 / 1 / 1, not "down one"
-    expect(world.statuses.at(-1)).toBe('✓1 ✗1 ?1')
+    expect(world.statuses.at(-1)).toBe('✓1 ✗1 ?1 ▁▅▁')
   })
 
   test('a workspace that appears mid-session brings old runs, not news', async ($, on) => {
@@ -535,7 +537,7 @@ describe('6 · /rook', () => {
     world.onRun = () => ({ code: 0, stdout: JSON.stringify({ written: [], skipped: ['F-001'], declined: [], gaps: [], credits: 0, summaries: [] }) })
     expect((await $.command.run(command('generate --total 3 -- refunds'))).text).toContain('in the background')
     await clock.advance(10)
-    expect(world.invocations.at(-1)).toEqual(['rook', 'generate', '--yes', '--json', '--total', '3', '--', 'refunds'])
+    expect(world.invocations.at(-1)).toEqual(['rook', 'generate', '--yes', '--json', '--verbose', '--total', '3', '--', 'refunds'])
     expect(world.toasts.at(-1)).toContain('1 feature already covered')
 
     world.onRun = () => ({ code: 0, stdout: 'http://127.0.0.1:5000/\n' })
@@ -767,7 +769,7 @@ describe('setup from inside Claude Code', () => {
     })
     const ran = (await $.tool.call({ tool: 'mcp__rook__explore', instruction: 'the commerce agent' } as never)) as Ran
 
-    expect(world.invocations.at(-1)).toEqual(['rook', 'explore', '.', '--yes', '--json', '--', 'the commerce agent'])
+    expect(world.invocations.at(-1)).toEqual(['rook', 'explore', '.', '--yes', '--json', '--verbose', '--', 'the commerce agent'])
     expect(asText(ran)).toContain('rook explore: 1 agent — 1 analysed, 0 unchanged, 2.10 credits')
     expect(asText(ran)).toContain('commercecare — 4 features · 1 findings (worst low)')
     expect(asText(ran)).toContain('rook generate tool')
@@ -833,7 +835,7 @@ describe('setup from inside Claude Code', () => {
     world.onRun = () => ({ code: 0, stdout: '1 analysed, 0 unchanged, 1.00 credits\n' })
     expect((await $.command.run(command('explore --force -- the refunds bot'))).text).toContain('in the background')
     await clock.advance(10)
-    expect(world.invocations.at(-1)).toEqual(['rook', 'explore', '.', '--yes', '--json', '--force', '--', 'the refunds bot'])
+    expect(world.invocations.at(-1)).toEqual(['rook', 'explore', '.', '--yes', '--json', '--verbose', '--force', '--', 'the refunds bot'])
     expect(world.toasts.at(-1)).toContain('1 analysed')
 
     expect((await $.command.run(command('profile'))).text).toContain('! rook profile add')

@@ -146,6 +146,7 @@ describe('readiness · background failures stay visible', () => {
 
     world.onRun = () => ({ code: 1, stdout: JSON.stringify({ ok: false, error: 'no project selected — run `rook project use <id>`', remedy: 'pick_project' }) })
     await ui.press({ key: 'run-all' })
+    await ui.press({ key: 'confirm-yes' })
     await clock.advance(10)
 
     expect((await ui.find({ key: 'last-error' }))?.text).toContain('last run failed: no project selected — run `rook project use <id>` (remedy: pick_project)')

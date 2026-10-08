@@ -202,7 +202,8 @@ export function runArgs(request: RunRequest, approval: Approval = { allowRules: 
 
 /** `rook generate`: write scenarios for the active agent. */
 export function generateArgs(request: GenerateRequest, approval: Approval = { allowRules: [] }): { argv: string[] } | { error: string } {
-  const argv = ['generate', ...approvalArgs(approval), '--json']
+  // --verbose: rook's subagent lines go to stderr, which the pane's progress lanes read; stdout keeps the summary.
+  const argv = ['generate', ...approvalArgs(approval), '--json', '--verbose']
 
   if (request.total !== undefined) {
     if (!Number.isInteger(request.total) || request.total < 1 || request.total > 500) {
@@ -427,7 +428,7 @@ export type ExploreRequest = { force?: boolean; instruction?: string }
 
 /** `rook explore .`: find the agents in this repository and write their features. */
 export function exploreArgs(request: ExploreRequest, approval: Approval = { allowRules: [] }): { argv: string[] } | { error: string } {
-  const argv = ['explore', '.', ...approvalArgs(approval), '--json', ...(request.force === true ? ['--force'] : [])]
+  const argv = ['explore', '.', ...approvalArgs(approval), '--json', '--verbose', ...(request.force === true ? ['--force'] : [])]
   const tail = instructionArgs(request.instruction)
 
   return 'error' in tail ? tail : { argv: [...argv, ...tail] }

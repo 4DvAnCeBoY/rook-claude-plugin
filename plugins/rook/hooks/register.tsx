@@ -1,7 +1,68 @@
 import { atom, read, update } from 'claude-code'
 import type { CommandRunInput, EngineInterface, Register } from 'claude-code'
 
-import type { RookCluster, RookReadiness, RookRunView, RookScenarioRow, RookSnapshot, RookStepId } from '../types'
+import type { RookCluster, RookConfirm, RookReadiness, RookRunView, RookScenarioRow, RookSnapshot, RookStepId, RookTab } from '../types'
+import type { El } from './views/kit'
+import { TabBar } from './views/tabs'
+import { ConfirmBar } from './views/confirm'
+import { SetupTab } from './views/setup'
+// ── imports: progress
+import { JobLanes } from './views/job'
+import { featureEntries, jobFromDisk, jobFromLine, jobSpinnerText, lineSplitter, newJob, scenarioEntries, scenarioKeys } from './progress'
+import type { DiskEntry } from './progress'
+import type { RookJob } from '../types'
+import type { Timer } from 'claude-code'
+// ── end imports: progress
+
+// ── imports: health
+import { estimateOf, gapGroups, notesOf, plural, unverifiedPrompt, untilAborted } from './health'
+import type { GapCause } from './health'
+// ── end imports: health
+
+// ── imports: runs tab
+import { RunsTab } from './views/runs'
+import { comparePair, compareText, diffRuns, historyOf, historySignature, ordered } from './history'
+import type { RunDiff } from './history'
+// ── end imports: runs tab
+
+// ── imports: scenarios tab
+import { ScenariosTab } from './views/scenarios'
+import type { ScenarioDetail } from './views/scenarios'
+import { FLAKY_DEFAULT, filterScenarios, flakyText, isFilter, parseFlakyArgs, readScenarios, regressionPrompt, toggled, withAll, withVerdicts } from './scenarios'
+import type { ScenarioInfo } from './scenarios'
+import { failureNote as scenarioFailureNote } from './format'
+import { rowOf } from './workspace'
+import type { RookStatus } from '../types'
+// ── end imports: scenarios tab
+
+// ── imports: setup tab
+import { budgetRefusal, budgetText, CONNECTION_FILES, GENERATE_ESTIMATE, parseBudget, profileView, spentOf, syncArgs, syncStateOf, syncStateText, syncText, verifiedProfiles, wizardOf } from './setup'
+import type { SyncState } from './setup'
+import type { SetupPanel } from './views/setup'
+// ── end imports: setup tab
+
+// ── imports: band
+import { mergeReach, reach } from './impact'
+import type { Reach } from './impact'
+import { tickedOf } from './format'
+import { RetestBand } from './views/band'
+// ── end imports: band
+
+// ── imports: status line
+import { composeStatus, trendOf } from './statusline'
+import type { TrendPoint } from './statusline'
+// ── end imports: status line
+
+// ── imports: card
+import type { RenderElement, RenderInput } from 'claude-code'
+import { CARD_RUN_TOOL, CARD_TOOL, cardFacts, cardProgress, runIdOf } from './card'
+import { RunProgressRow, VerdictCard } from './views/card'
+// ── end imports: card
+
+// ── imports: ci
+import { parseCiArgs, previewText, WORKFLOW_PATH, workflowYaml, writtenText } from './ci'
+import type { CiPlan, CiRequest } from './ci'
+// ── end imports: ci
 import {
   agentsText,
   balanceText,
@@ -33,13 +94,11 @@ import {
   runsText,
   scenariosText,
   spinnerText,
-  staleLine,
-  statusLine,
   statusText,
   unlooked,
 } from './format'
 import { assess, declaredVariables, isRunCommand } from './guard'
-import { impactOf, indexAgent, relativeTo } from './impact'
+import { indexAgent, relativeTo } from './impact'
 import { authOf, blockedText, blockerOf, checklistText, diskFacts, learned, NEEDS, readinessOf, setupLine, versionOf } from './readiness'
 import type { CliFacts } from './readiness'
 import type { AgentIndex } from './impact'
@@ -115,6 +174,49 @@ const lastErrorAtom = atom({ plugin: 'rook', key: 'lastError' } as const, null)
 const agentsAtom = atom({ plugin: 'rook', key: 'agents' } as const, [])
 const balanceAtom = atom({ plugin: 'rook', key: 'balance' } as const, null)
 const explainingAtom = atom({ plugin: 'rook', key: 'explaining' } as const, null)
+const tabAtom = atom({ plugin: 'rook', key: 'tab' } as const, 'health')
+const confirmAtom = atom({ plugin: 'rook', key: 'confirm' } as const, null)
+
+// ── atoms: progress
+const jobAtom = atom({ plugin: 'rook', key: 'job' } as const, null)
+// ── end atoms: progress
+
+// ── atoms: health
+// ── end atoms: health
+
+// ── atoms: runs tab
+const historyAtom = atom({ plugin: 'rook', key: 'history' } as const, null)
+const compareAtom = atom({ plugin: 'rook', key: 'compare' } as const, [])
+const runOpenAtom = atom({ plugin: 'rook', key: 'runOpen' } as const, null)
+const runDiffAtom = atom({ plugin: 'rook', key: 'runDiff' } as const, null)
+// ── end atoms: runs tab
+
+// ── atoms: scenarios tab
+const selectedAtom = atom({ plugin: 'rook', key: 'selected' } as const, [])
+const filterAtom = atom({ plugin: 'rook', key: 'filter' } as const, 'all')
+const draftAtom = atom({ plugin: 'rook', key: 'draft' } as const, '')
+const flakyAtom = atom({ plugin: 'rook', key: 'flaky' } as const, {})
+const scenarioDetailAtom = atom({ plugin: 'rook', key: 'scenarioDetail' } as const, null)
+// ── end atoms: scenarios tab
+
+// ── atoms: setup tab
+const budgetAtom = atom({ plugin: 'rook', key: 'budget' } as const, null)
+const syncAtom = atom({ plugin: 'rook', key: 'sync' } as const, null)
+// ── end atoms: setup tab
+
+// ── atoms: band
+const untickedAtom = atom({ plugin: 'rook', key: 'unticked' } as const, [])
+const bandOpenAtom = atom({ plugin: 'rook', key: 'isBandOpen' } as const, false)
+// ── end atoms: band
+
+// ── atoms: status line
+// ── end atoms: status line
+
+// ── atoms: card
+// ── end atoms: card
+
+// ── atoms: ci
+// ── end atoms: ci
 
 // The plugin's own tools as exact patterns: the engine's tool table is laid
 // when the mod loads, before session.start registers them.
@@ -129,11 +231,21 @@ const EXPLORE_TOOL = /^mcp__rook__explore$/
 const PROFILE_TOOL = /^mcp__rook__profile_test$/
 const AGENT_TOOL = /^mcp__rook__agent$/
 const CURATE_TOOL = /^mcp__rook__curate$/
+// ── tool patterns: runs tab
+const COMPARE_TOOL = /^mcp__rook__compare$/
+// ── end tool patterns: runs tab
+// ── tool patterns: setup tab
+const SYNC_TOOL = /^mcp__rook__sync$/
+// ── end tool patterns: setup tab
+// ── tool patterns: ci
+const CI_TOOL = /^mcp__rook__ci$/
+// ── end tool patterns: ci
 /** Every tool that writes a file; MultiEdit exists on some builds only. */
 const EDIT_TOOLS = /^(Edit|Write|MultiEdit|NotebookEdit)$/
 
 const USAGE = [
   '/rook                 open the live verdict pane',
+  '/rook tab health|runs|scenarios|setup   open the pane on a tab',
   '/rook status          agents, scenarios and sync state',
   '/rook scenarios       every scenario with its latest verdict',
   '/rook runs [N]        the agent\'s runs on disk, newest first (default 20)',
@@ -149,6 +261,12 @@ const USAGE = [
   '/rook project [list|use <id>|create <name>]  the rook project this workspace records to',
   "/rook explore [--force] [-- <instruction>]   read this repository: find the agents, write their features",
   '/rook profile [list|use <id>|test [id] [-- <goal>]]  how rook reaches the agent (add one: ! rook profile add …)',
+  '/rook compare [base] [head]  what changed between two runs, per scenario (default: the two newest finished runs)',
+  '/rook flaky SC-001 [N]   re-run one scenario N times in a row (default 3, 2-10) and say whether the verdicts disagree',
+  '          (spends credits each run)',
+  '/rook sync            record this project upstream (rook sync): every agent, one write. No credits',
+  '/rook budget [<credits>|off|status]   cap what runs and generates may spend this session',
+  '/rook ci [write] [--force] [--strict]   preview (or write) .github/workflows/rook.yml: rook as a pull-request check',
   '/rook ui              open the on-disk results viewer (rook ui --local)',
   '/rook confirm-prod [profile]  allow runs against a production-looking target for 15 minutes',
   '',
@@ -179,6 +297,14 @@ type Ctx = {
   rows: RowCache
   /** Installed and signed in, as the CLI last said: probed at start and when they block, not every poll. */
   cli: CliFacts
+  /** The agent's runs list as the Runs tab last read it, to skip re-reading when nothing changed. */
+  historySignature?: string
+  /** The status line's recent finished runs, re-read only when the runs on disk change. */
+  statusTrend?: { key: string; points: TrendPoint[] }
+  /** Ends the background run the person started (pane, /rook run), for its Cancel. */
+  runAbort?: AbortController
+  /** The agent's scenario files as last read for the Scenarios tab, keyed by agent directory and index signature. */
+  scenarioList?: { key: string; list: ScenarioInfo[] }
 }
 
 function textOption(value: unknown, fallback: string): string {
@@ -220,11 +346,20 @@ async function rookJson($: EngineInterface, ctx: Ctx, args: string[]): Promise<C
  * A run can outlast `process.run`'s ten-minute ceiling, so it is streamed: the
  * child lives as long as the loop reading it, and `signal` ends both.
  */
-async function rookRun($: EngineInterface, ctx: Ctx, argv: string[], signal?: AbortSignal, env: Record<string, string> = {}): Promise<CliResult> {
+async function rookRun(
+  $: EngineInterface,
+  ctx: Ctx,
+  argv: string[],
+  signal?: AbortSignal,
+  env: Record<string, string> = {},
+  onLine?: (line: string) => void,
+): Promise<CliResult> {
   const stream = $.process.spawn({ argv: [ctx.bin, ...argv], env: { ...CLI_ENV, ...env }, input: '', ...(ctx.cwd !== '' && { cwd: ctx.cwd }) })
   const iterator = stream[Symbol.asyncIterator]()
   let stdout = ''
   let stderr = ''
+  // Whole lines as they arrive, each stream split on its own: progress for a caller that draws it.
+  const lines = onLine === undefined ? undefined : { stdout: lineSplitter(onLine), stderr: lineSplitter(onLine) }
 
   for (;;) {
     if (signal?.aborted) {
@@ -233,13 +368,23 @@ async function rookRun($: EngineInterface, ctx: Ctx, argv: string[], signal?: Ab
       return { exitCode: 130, doc: undefined, stderr: `${stderr}\ninterrupted` }
     }
 
-    const step = await iterator.next()
+    const step = await untilAborted(iterator.next(), signal)
+
+    if (step === undefined) {
+      void iterator.return?.(undefined as never)?.catch(() => undefined)
+
+      return { exitCode: 130, doc: undefined, stderr: `${stderr}\ninterrupted` }
+    }
 
     if (step.done) {
       const ended = step.value as { code: number | null } | undefined
+      lines?.stdout.flush()
+      lines?.stderr.flush()
 
       return { exitCode: ended?.code ?? 1, doc: jsonOf(stdout), stderr, stdout }
     }
+
+    lines?.[step.value.stream === 'stdout' ? 'stdout' : 'stderr'].push(step.value.text)
 
     if (step.value.stream === 'stdout') {
       stdout += step.value.text
@@ -264,12 +409,21 @@ async function showStatus($: EngineInterface, ctx: Ctx): Promise<void> {
   }
 
   const snapshot = await read($, snapshotAtom)
-  const running = await read($, runningAtom)
 
   // A workspace that cannot run yet says which step is missing; outside one, nothing.
-  const line = [statusLine(snapshot, running !== null), setupLine(snapshot?.readiness)].filter(Boolean).join(' · ')
+  const line = composeStatus({
+    snapshot,
+    running: await read($, runningAtom),
+    stale: await read($, staleAtom),
+    balance: await read($, balanceAtom),
+    budget: await read($, budgetAtom),
+    job: await read($, jobAtom),
+    trend: await statusTrend($, ctx, snapshot),
+    setup: setupLine(snapshot?.readiness),
+    now: await $.clock.now(),
+  })
 
-  $.ui.status(line === '' ? undefined : line)
+  $.ui.status(line)
 }
 
 // ── readiness ────────────────────────────────────────────────────────────────
@@ -430,6 +584,7 @@ async function poll($: EngineInterface, ctx: Ctx): Promise<void> {
       await finished($, ctx, loc, latest, before?.agentId !== loc.agentId)
     }
   } finally {
+    await refreshHistory($, ctx)
     ctx.isPolling = false
     await showStatus($, ctx)
   }
@@ -552,12 +707,14 @@ async function prodBlock($: EngineInterface, ctx: Ctx, profileRef?: string): Pro
 
 // ── running ──────────────────────────────────────────────────────────────────
 
-async function backgroundRun($: EngineInterface, ctx: Ctx, argv: string[]): Promise<void> {
+async function backgroundRun($: EngineInterface, ctx: Ctx, argv: string[], signal?: AbortSignal): Promise<void> {
   try {
-    const result = await rookRun($, ctx, argv)
+    const result = await rookRun($, ctx, argv, signal)
     const problem = failureOf(result)
 
-    if (problem !== undefined) {
+    if (signal?.aborted) {
+      $.ui.toast('rook: run cancelled')
+    } else if (problem !== undefined) {
       // A toast vanishes; the pane keeps the failure until the next run starts.
       const text = await explained($, ctx, result, `run failed: ${problem}`, NEEDS.run, 'run')
 
@@ -574,6 +731,10 @@ async function backgroundRun($: EngineInterface, ctx: Ctx, argv: string[]): Prom
     await update($, lastErrorAtom, () => ({ source: 'run', text, at }))
     $.ui.toast(`rook: ${text}`)
   } finally {
+    if (signal !== undefined && ctx.runAbort?.signal === signal) {
+      ctx.runAbort = undefined
+    }
+
     await update($, runningAtom, () => null)
     await poll($, ctx)
     await refreshBalance($, ctx)
@@ -598,7 +759,7 @@ async function startRun($: EngineInterface, ctx: Ctx, request: RunRequest, sourc
     return `rook: ${unready}`
   }
 
-  const blocked = await prodBlock($, ctx, request.profile)
+  const blocked = (await prodBlock($, ctx, request.profile)) ?? (await budgetBlock($, ctx, 'run', request.only?.length))
 
   if (blocked !== undefined) {
     return blocked
@@ -611,7 +772,10 @@ async function startRun($: EngineInterface, ctx: Ctx, request: RunRequest, sourc
   await update($, runningAtom, () => ({ startedAt, label, source }))
   await update($, lastErrorAtom, () => null)
   await showStatus($, ctx)
-  $.clock.after(0, () => backgroundRun($, ctx, args.argv))
+  const abort = new AbortController()
+
+  ctx.runAbort = abort
+  $.clock.after(0, () => backgroundRun($, ctx, args.argv, abort.signal))
 
   return `rook: running ${label} in the background. Progress shows in the pane and the status line.`
 }
@@ -634,7 +798,7 @@ async function toolRun($: EngineInterface, ctx: Ctx, request: RunRequest, signal
     return { deny: `rook ${unready}` }
   }
 
-  const blocked = await prodBlock($, ctx, request.profile)
+  const blocked = (await prodBlock($, ctx, request.profile)) ?? (await budgetBlock($, ctx, 'run', request.only?.length))
 
   if (blocked !== undefined) {
     return { deny: blocked }
@@ -796,27 +960,30 @@ async function scenariosReply($: EngineInterface, ctx: Ctx): Promise<string> {
 }
 
 /** `rook generate`, streamed like a run: it reads the code and writes scenarios, which takes minutes. */
-async function generateRun($: EngineInterface, ctx: Ctx, request: GenerateRequest, signal?: AbortSignal): Promise<string> {
+async function generateRun($: EngineInterface, ctx: Ctx, request: GenerateRequest, signal?: AbortSignal, source: NonNullable<RookJob['source']> = 'tool'): Promise<string> {
   const args = generateArgs(request, ctx.approval)
 
   if ('error' in args) {
     return `rook: ${args.error}`
   }
 
-  const unready = await setupBlock($, ctx, NEEDS.generate, 'generate scenarios')
+  const unready = (await setupBlock($, ctx, NEEDS.generate, 'generate scenarios')) ?? (await budgetBlock($, ctx, 'generate'))
 
   if (unready !== undefined) {
-    return `rook: ${unready}`
+    return `rook: ${unready.replace(/^rook:\s*/, '')}`
   }
 
+  const job = await jobBegin($, ctx, 'generate', jobLabel(ctx, 'generate', request.instruction), source)
+
   try {
-    const result = await rookRun($, ctx, args.argv, signal)
+    const result = await rookRun($, ctx, args.argv, signal, {}, line => jobLine($, job, line))
     const problem = failureOf(result)
 
     return problem !== undefined && (result.doc === undefined || (result.doc as { ok?: unknown }).ok === false)
       ? await explained($, ctx, result, `rook generate did not complete: ${problem}`, NEEDS.generate, 'generate scenarios')
       : generateText(result.doc, result.stdout ?? '') + (problem ? `\n${problem}` : '')
   } finally {
+    await jobEnd($, job)
     ctx.agentIndex = undefined // the scenario set changed
     ctx.isDirty = true
     await poll($, ctx)
@@ -918,22 +1085,39 @@ async function noted($: EngineInterface, ctx: Ctx, path: string): Promise<void> 
     return
   }
 
-  const index = ctx.agentIndex ?? (await indexAgent(ioOf($, ctx), loc.agentDir))
+  const io = ioOf($, ctx)
+  const index = ctx.agentIndex ?? (await indexAgent(io, loc.agentDir))
   ctx.agentIndex = index
   const stale = await read($, staleAtom)
-  const files = [...new Set([...(stale?.files ?? []), rel])].filter(file => impactOf(index, [file]) !== undefined)
-  const impact = impactOf(index, files)
+  const files = [...new Set([...(stale?.files ?? []), rel])]
+  // Each file is read again: what it defines may have changed with this edit.
+  const reaches = (await Promise.all(files.map(file => reach(index, file, path => io.read(path))))).filter((r): r is Reach => r !== undefined)
 
-  if (impact === undefined) {
+  if (reaches.length === 0) {
     return
   }
 
+  const impact = mergeReach(index, reaches)
   const since = await $.clock.now()
   const rate = creditsPerScenario((await read($, snapshotAtom))?.latest)
   const estimate = rate === undefined ? undefined : rate * impact.scenarios.length
 
-  await update($, staleAtom, () => ({ files, scenarios: impact.scenarios, isWholeAgent: impact.isWholeAgent, ...(estimate !== undefined && { estimate }), since }))
+  await update($, staleAtom, () => ({
+    files: impact.files,
+    scenarios: impact.scenarios,
+    isWholeAgent: impact.isWholeAgent,
+    ...(impact.reason !== undefined && { reason: impact.reason }),
+    ...(estimate !== undefined && { estimate }),
+    since,
+  }))
+
+  if (stale === null) {
+    await update($, untickedAtom, () => []) // a new band starts with every scenario ticked
+    await update($, bandOpenAtom, () => false)
+  }
+
   await update($, bandHiddenAtom, () => false)
+  await showStatus($, ctx)
 }
 
 async function fixWithClaude($: EngineInterface, ctx: Ctx, run: RookRunView): Promise<void> {
@@ -965,20 +1149,28 @@ async function fixOne($: EngineInterface, ctx: Ctx, run: RookRunView, id: string
   }
 }
 
+/** The band's Re-test: only the ticked scenarios. */
 async function retest($: EngineInterface): Promise<void> {
   const stale = await read($, staleAtom)
+  const unticked = await read($, untickedAtom)
+
+  if (stale !== null && stale.scenarios.length > 0 && tickedOf(stale, unticked).length === 0) {
+    $.ui.toast('rook: tick at least one scenario to re-test')
+
+    return
+  }
 
   await update($, bandHiddenAtom, () => true)
 
   if (stale !== null) {
-    await $.prompt.submit({ text: retestPrompt(stale) })
+    await $.prompt.submit({ text: retestPrompt(stale, unticked) })
   }
 }
 
 /** `/rook generate`: in the background, its failure kept in the pane as well as toasted. */
 async function backgroundGenerate($: EngineInterface, ctx: Ctx, request: GenerateRequest): Promise<void> {
   await update($, lastErrorAtom, () => null)
-  const text = await generateRun($, ctx, request).catch(error => `rook generate failed: ${String(error)}`)
+  const text = await generateRun($, ctx, request, undefined, 'background').catch(error => `rook generate failed: ${String(error)}`)
 
   // What was written always opens "rook generate: N scenario files written"; anything else failed.
   if (!text.startsWith('rook generate:')) {
@@ -1015,6 +1207,28 @@ async function rookCommand($: EngineInterface, ctx: Ctx, e: CommandRunInput): Pr
 
       return { text: (opened.isPlaced ? 'pane opened.' : `pane is waiting: ${opened.reason}`) + setup }
     }
+    case 'tab': {
+      const tab = rest[0] as RookTab | undefined
+
+      if (tab !== 'health' && tab !== 'runs' && tab !== 'scenarios' && tab !== 'setup') {
+        return { text: 'rook: tab health, runs, scenarios or setup.' }
+      }
+
+      await setTab($, tab)
+      await $.ui.open({ id: PANE, title: 'rook' })
+
+      return { text: `${tab} tab open.` }
+    }
+    case 'compare':
+      return { text: await compareReply($, ctx, rest) }
+    case 'flaky':
+      return { text: await flakyReply($, ctx, rest) }
+    case 'sync':
+      return { text: await syncReply($, ctx) }
+    case 'budget':
+      return { text: await budgetReply($, ctx, rest) }
+    case 'ci':
+      return { text: await ciReply($, ctx, rest) }
     case 'status':
       return { text: await statusReply($, ctx) }
     case 'runs':
@@ -1085,7 +1299,7 @@ async function rookCommand($: EngineInterface, ctx: Ctx, e: CommandRunInput): Pr
         return { text: unready }
       }
 
-      $.clock.after(0, async () => $.ui.toast(clip(await exploreRun($, ctx, request).catch(error => `rook explore failed: ${String(error)}`), 300)))
+      $.clock.after(0, async () => $.ui.toast(clip(await exploreRun($, ctx, request, undefined, 'background').catch(error => `rook explore failed: ${String(error)}`), 300)))
 
       return { text: 'rook: exploring this repository in the background (minutes, spends credits). A toast says what it found; the pane picks the agent up.' }
     }
@@ -1222,7 +1436,7 @@ async function agentsOnDisk($: EngineInterface, ctx: Ctx): Promise<{ id: string;
   return found
 }
 
-async function exploreRun($: EngineInterface, ctx: Ctx, request: ExploreRequest, signal?: AbortSignal): Promise<string> {
+async function exploreRun($: EngineInterface, ctx: Ctx, request: ExploreRequest, signal?: AbortSignal, source: NonNullable<RookJob['source']> = 'tool'): Promise<string> {
   const args = exploreArgs(request, ctx.approval)
 
   if ('error' in args) {
@@ -1235,8 +1449,10 @@ async function exploreRun($: EngineInterface, ctx: Ctx, request: ExploreRequest,
     return `rook: ${unready}`
   }
 
+  const job = await jobBegin($, ctx, 'explore', jobLabel(ctx, 'explore', request.instruction), source)
+
   try {
-    const result = await rookRun($, ctx, args.argv, signal)
+    const result = await rookRun($, ctx, args.argv, signal, {}, line => jobLine($, job, line))
 
     if (result.exitCode !== 0) {
       const problem = failureOf(result) ?? `rook exited ${result.exitCode}`
@@ -1246,6 +1462,7 @@ async function exploreRun($: EngineInterface, ctx: Ctx, request: ExploreRequest,
 
     return exploreText(result.stdout ?? '', await agentsOnDisk($, ctx))
   } finally {
+    await jobEnd($, job)
     ctx.agentIndex = undefined // agents and features were written
     ctx.isDirty = true
     await poll($, ctx)
@@ -1320,6 +1537,7 @@ async function refreshBalance($: EngineInterface, ctx: Ctx): Promise<number | nu
 
   if ((await read($, balanceAtom)) !== balance) {
     await update($, balanceAtom, () => balance)
+    await showStatus($, ctx)
   }
 
   return balance
@@ -1542,6 +1760,1010 @@ async function curateReply($: EngineInterface, ctx: Ctx, verb: string, ids: stri
   return curateText(ran.doc)
 }
 
+// ── shared: tabs and the confirm bar ─────────────────────────────────────────
+
+async function setTab($: EngineInterface, tab: RookTab): Promise<void> {
+  await update($, tabAtom, () => tab)
+}
+
+/** Park a credit-spending action in the pane until the person confirms it. */
+async function askConfirm($: EngineInterface, confirm: RookConfirm): Promise<void> {
+  await update($, confirmAtom, () => confirm)
+}
+
+/** The pane's Confirm: replay the parked action. */
+async function confirmNow($: EngineInterface, ctx: Ctx): Promise<void> {
+  const confirm = await read($, confirmAtom)
+
+  await update($, confirmAtom, () => null)
+
+  if (confirm?.action === 'run') {
+    await paneRun($, ctx, confirm.only === undefined ? {} : { only: confirm.only })
+  } else if (confirm?.action === 'generate') {
+    const request: GenerateRequest = {
+      ...(confirm.instruction !== undefined && { instruction: confirm.instruction }),
+      ...(confirm.total !== undefined && { total: confirm.total }),
+      ...(confirm.force === true && { force: true }),
+    }
+
+    $.ui.toast('rook: generating scenarios in the background.')
+    $.clock.after(0, () => backgroundGenerate($, ctx, request))
+  } else if (confirm?.action === 'flaky') {
+    $.ui.toast(await flakyStart($, ctx, confirm.id, confirm.times, 'pane'))
+  } else if (confirm?.action === 'profile-test') {
+    await paneProfileTest($, ctx, confirm.profile)
+  }
+}
+
+// ══ feature: progress (generate / explore lanes) ═════════════════════════════
+
+/** How often a job's elapsed time redraws and the disk is looked at. */
+const JOB_TICK_MS = 1_000
+
+/**
+ * The job this load is watching: what was on disk when it started, which
+ * feature each touched scenario file belongs to, and its timer. One job is
+ * drawn at a time; a second one started meanwhile takes the lanes over.
+ */
+type JobWatch = { job: RookJob; agentDir?: string; before: Set<string>; owners: Map<string, string | undefined>; timer?: Timer; isLooking: boolean }
+
+let jobWatch: JobWatch | undefined
+
+/** Sets `jobAtom` for a generate or explore about to start, and starts watching the disk for it. */
+async function jobBegin($: EngineInterface, ctx: Ctx, kind: RookJob['kind'], label: string, source: NonNullable<RookJob['source']>): Promise<JobWatch> {
+  const now = await $.clock.now()
+  const io = ioOf($, ctx)
+  const agentDir = kind === 'generate' ? (ctx.located ?? (await where($, ctx)))?.agentDir : undefined
+  const keys = kind === 'generate' ? (agentDir === undefined ? [] : await scenarioKeys(io, agentDir)) : (await featureEntries(io)).map(entry => entry.key)
+  const watch: JobWatch = { job: newJob(kind, label, now, source), ...(agentDir !== undefined && { agentDir }), before: new Set(keys), owners: new Map(), isLooking: false }
+
+  jobWatch?.timer?.cancel()
+  jobWatch = watch
+  await update($, jobAtom, () => watch.job)
+  watch.timer = $.clock.every(JOB_TICK_MS, () => jobLook($, ctx, watch))
+
+  return watch
+}
+
+/** One line rook printed, folded into the job it belongs to. */
+async function jobLine($: EngineInterface, watch: JobWatch, line: string): Promise<void> {
+  // Called unawaited from the stream loop: nothing here may reject.
+  try {
+    const now = await $.clock.now()
+
+    if (jobWatch === watch) {
+      watch.job = jobFromLine(watch.job, line, now)
+      await update($, jobAtom, () => watch.job)
+    }
+  } catch {
+    // a line that could not be drawn is only a line
+  }
+}
+
+/** Each tick: what the disk says was written, and the elapsed time moved on. */
+async function jobLook($: EngineInterface, ctx: Ctx, watch: JobWatch): Promise<void> {
+  if (jobWatch !== watch || watch.isLooking) {
+    return
+  }
+
+  watch.isLooking = true
+
+  try {
+    const io = ioOf($, ctx)
+    const entries =
+      watch.job.kind === 'generate'
+        ? watch.agentDir === undefined
+          ? []
+          : await scenarioEntries(io, watch.agentDir, watch.before, watch.job.startedAt, watch.owners)
+        : await featureEntries(io)
+    const now = await $.clock.now()
+
+    if (jobWatch === watch) {
+      watch.job = jobFromDisk(watch.job, watch.before, entries, now)
+      await update($, jobAtom, () => watch.job)
+      await update($, tickAtom, () => now)
+    }
+  } finally {
+    watch.isLooking = false
+  }
+}
+
+/** The command ended, however it ended: the lanes go. */
+async function jobEnd($: EngineInterface, watch: JobWatch): Promise<void> {
+  watch.timer?.cancel()
+
+  if (jobWatch === watch) {
+    jobWatch = undefined
+    await update($, jobAtom, () => null)
+  }
+}
+
+/**
+ * The stored job, if this load is the one running it. `$.state` outlives a
+ * reload and the watcher does not, so a job left behind by a reload mid-run
+ * would otherwise be drawn forever.
+ */
+function liveJob(job: RookJob | null): RookJob | null {
+  return jobWatch === undefined ? null : job
+}
+
+/** What the lanes are titled: the agent, and the instruction when there is one. */
+function jobLabel(ctx: Ctx, kind: RookJob['kind'], instruction: string | undefined): string {
+  const what = kind === 'generate' ? `scenarios for ${ctx.located?.agentId ?? 'the active agent'}` : 'this repository'
+
+  return instruction === undefined || instruction.trim() === '' ? what : `${what} — ${clip(instruction, 60)}`
+}
+// ══ end feature: progress ════════════════════════════════════════════════════
+
+// ══ feature: health (Unable to Verify fixer, cancel, run confirm) ════════════
+
+/** The pane's Cancel on a run the person started: the child ends, backgroundRun clears the rest and says so. */
+async function cancelRun($: EngineInterface, ctx: Ctx): Promise<void> {
+  const running = await read($, runningAtom)
+
+  if (running === null || running.source === 'tool') {
+    return
+  }
+
+  if (ctx.runAbort !== undefined) {
+    ctx.runAbort.abort()
+
+    return
+  }
+
+  // Nothing of this load is running it (a reload ended the child): clear what says it is.
+  await update($, runningAtom, () => null)
+  $.ui.toast('rook: run cancelled')
+}
+
+/** One group of "what nobody looked at" handed to Claude: make the evidence observable, keep the criteria. */
+async function fixUnverified($: EngineInterface, ctx: Ctx, run: RookRunView, cause: GapCause): Promise<void> {
+  const loc = ctx.located ?? (await where($, ctx))
+  const group = gapGroups(unlooked(run)).find(g => g.cause === cause)
+
+  if (loc === undefined || group === undefined) {
+    return
+  }
+
+  const profile = await profileOf($, ctx)
+  const profileText = profile === undefined ? undefined : await ioOf($, ctx).read(`${loc.agentDir}/profiles/${profile.profileId}.yaml`)
+
+  await $.prompt.submit({
+    text: unverifiedPrompt({
+      runId: run.runId,
+      agentId: loc.agentId,
+      agentDir: loc.agentDir,
+      group,
+      ...(profile !== undefined && profileText !== undefined && { profileId: profile.profileId, profileText }),
+    }),
+  })
+}
+
+/** Park a run of these scenarios behind the confirm bar, with what it would cost. */
+async function confirmRun($: EngineInterface, run: RookRunView | undefined, label: string, only?: string[], count = only?.length ?? 0): Promise<void> {
+  await askConfirm($, { action: 'run', label, ...(only !== undefined && { only }), ...estimateOf(creditsPerScenario(run), count) })
+}
+// ══ end feature: health ══════════════════════════════════════════════════════
+
+// ══ feature: runs tab (history, compare) ═════════════════════════════════════
+
+/** The Runs tab's list: re-read only when the agent's runs on disk changed. Called at the end of every poll. */
+async function refreshHistory($: EngineInterface, ctx: Ctx): Promise<void> {
+  try {
+    const loc = ctx.located
+
+    if (loc === undefined) {
+      if (ctx.historySignature !== undefined) {
+        ctx.historySignature = undefined
+        await update($, historyAtom, () => null)
+      }
+
+      return
+    }
+
+    const io = ioOf($, ctx)
+    const ids = await runIds(io, loc.agentDir)
+    const latest = (await read($, snapshotAtom))?.latest
+    const signature = historySignature(loc.agentDir, ids, latest?.runId === ids[0] && latest?.finished === true)
+
+    if (signature === ctx.historySignature) {
+      return
+    }
+
+    ctx.historySignature = signature
+    const history = await historyOf(io, loc.agentDir, ids)
+
+    await update($, historyAtom, () => history)
+  } catch {
+    ctx.historySignature = undefined // read again next poll
+  }
+}
+
+/** Two runs of the agent, diffed scenario by scenario; the two newest finished runs by default. */
+async function diffOf($: EngineInterface, ctx: Ctx, loc: Located, baseRef?: string, headRef?: string): Promise<RunDiff | { error: string }> {
+  const io = ioOf($, ctx)
+  const ids = await runIds(io, loc.agentDir)
+  const pool = baseRef === undefined && headRef === undefined ? (await historyOf(io, loc.agentDir, ids, 2)).map(run => run.runId) : ids
+  const pair = comparePair(pool, baseRef, headRef)
+
+  if ('error' in pair) {
+    return pair
+  }
+
+  const base = await readRun(io, loc.agentDir, pair.base, ctx.rows)
+  const head = await readRun(io, loc.agentDir, pair.head, ctx.rows)
+
+  if (base === undefined || head === undefined) {
+    return { error: `run ${base === undefined ? pair.base : pair.head} has no run.yaml.` }
+  }
+
+  return diffRuns(base, head)
+}
+
+/** The diff as text, for `/rook compare` and the compare tool: disk only, no credits. */
+async function compareRuns($: EngineInterface, ctx: Ctx, baseRef: string | undefined, headRef: string | undefined): Promise<string> {
+  const blocked = await setupBlock($, ctx, ['agent'], 'compare runs')
+  const loc = await where($, ctx)
+
+  if (blocked !== undefined || loc === undefined) {
+    return `rook: ${blocked ?? "can't compare runs yet: no agent here."}`
+  }
+
+  const bad = [baseRef, headRef].find(ref => ref !== undefined && !RUN_ID.test(ref))
+
+  if (bad !== undefined) {
+    return `rook: "${clip(bad, 40)}" is not a run id (2026-09-28T15-54-56Z form).`
+  }
+
+  const diff = await diffOf($, ctx, loc, baseRef, headRef)
+
+  return 'error' in diff ? `rook: ${diff.error}` : compareText(loc.agentId, diff)
+}
+
+/** `/rook compare [base] [head]`. */
+async function compareReply($: EngineInterface, ctx: Ctx, args: string[]): Promise<string> {
+  if (args.length > 2) {
+    return 'rook: compare [base run] [head run]; with none, the two newest finished runs.'
+  }
+
+  return compareRuns($, ctx, args[0], args[1])
+}
+
+/** The Runs tab opens a run: read from disk once, kept until Back. */
+async function openRun($: EngineInterface, ctx: Ctx, runId: string): Promise<void> {
+  const loc = ctx.located ?? (await where($, ctx))
+  const run = loc === undefined ? undefined : await readRun(ioOf($, ctx), loc.agentDir, runId, ctx.rows)
+
+  if (run === undefined) {
+    $.ui.toast(`rook: run ${runId} could not be read.`)
+
+    return
+  }
+
+  await update($, runOpenAtom, () => run)
+}
+
+async function closeRun($: EngineInterface): Promise<void> {
+  await update($, runOpenAtom, () => null)
+}
+
+/** "Report to Claude": the opened run's failures (or its summary) as a prompt. */
+async function reportRun($: EngineInterface, ctx: Ctx): Promise<void> {
+  const run = await read($, runOpenAtom)
+  const loc = ctx.located ?? (await where($, ctx))
+
+  if (run === null || loc === undefined) {
+    return
+  }
+
+  if (run.counts.fail > 0) {
+    await fixWithClaude($, ctx, run)
+
+    return
+  }
+
+  await $.prompt.submit({ text: `${runSummary(run, loc.agentDir, loc.agentId)}
+
+Nothing failed in this run. Say whether anything above needs attention.` })
+}
+
+/** "Explain with rca" on the opened run. */
+async function explainRun($: EngineInterface, ctx: Ctx): Promise<void> {
+  const run = await read($, runOpenAtom)
+
+  if (run !== null) {
+    await paneExplain($, ctx, run.runId)
+  }
+}
+
+/** "Compare with…": the opened run is the first of two; the list then picks the second. */
+async function compareWith($: EngineInterface): Promise<void> {
+  const run = await read($, runOpenAtom)
+
+  if (run !== null) {
+    await update($, runDiffAtom, () => null)
+    await update($, compareAtom, () => [run.runId])
+  }
+}
+
+/** A run picked in the list: the second of two diffs them, older as base. */
+async function pickRun($: EngineInterface, ctx: Ctx, runId: string): Promise<void> {
+  const picked = await read($, compareAtom)
+
+  if (picked.length !== 1 || picked[0] === runId) {
+    await update($, compareAtom, () => [runId])
+
+    return
+  }
+
+  const [base, head] = ordered(picked[0]!, runId)
+  const loc = ctx.located ?? (await where($, ctx))
+  const diff = loc === undefined ? { error: 'no agent here.' } : await diffOf($, ctx, loc, base, head)
+
+  if ('error' in diff) {
+    $.ui.toast(`rook: ${diff.error}`)
+
+    return
+  }
+
+  await update($, runDiffAtom, () => diff)
+  await update($, compareAtom, () => [base, head])
+}
+
+/** Cancel a pick (back to the opened run), or leave a comparison (back to the list). */
+async function clearCompare($: EngineInterface): Promise<void> {
+  if ((await read($, compareAtom)).length === 2) {
+    await update($, runOpenAtom, () => null)
+  }
+
+  await update($, compareAtom, () => [])
+  await update($, runDiffAtom, () => null)
+}
+
+// ══ end feature: runs tab ════════════════════════════════════════════════════
+
+// ══ feature: scenarios tab (filter, select, detail, flaky, generate box) ═════
+
+/** The agent's scenario files, read once per change of the scenario set (the poll's index signature), not per drawing. */
+async function scenarioList($: EngineInterface, ctx: Ctx): Promise<ScenarioInfo[]> {
+  const loc = ctx.located
+
+  if (loc === undefined) {
+    return []
+  }
+
+  const key = `${loc.agentDir}#${ctx.indexSignature ?? ''}`
+
+  if (ctx.scenarioList?.key === key) {
+    return ctx.scenarioList.list
+  }
+
+  const list = await readScenarios(ioOf($, ctx), loc.agentDir)
+  ctx.scenarioList = { key, list }
+
+  return list
+}
+
+/** A scenario's verdict in one run, from the row cache or its verdict.yaml. */
+async function scenarioVerdict($: EngineInterface, ctx: Ctx, id: string, runId: string): Promise<{ row?: RookScenarioRow; verdictPath?: string }> {
+  const loc = ctx.located ?? (await where($, ctx))
+
+  if (loc === undefined) {
+    return {}
+  }
+
+  const verdictPath = `${loc.agentDir}/runs/${runId}/scenarios/${id}/verdict.yaml`
+  const cached = ctx.rows.get(`${runId}/${id}`)
+
+  if (cached !== undefined) {
+    return { row: cached, verdictPath }
+  }
+
+  const text = await ioOf($, ctx).read(verdictPath)
+  const row = text === undefined ? undefined : rowOf(id, text, undefined)
+
+  return row === undefined ? { verdictPath } : { row, verdictPath }
+}
+
+async function scenarioRunSelected($: EngineInterface): Promise<void> {
+  const selected = await read($, selectedAtom)
+
+  if (selected.length === 0) {
+    return
+  }
+
+  const rate = creditsPerScenario((await read($, snapshotAtom))?.latest)
+  const label = `Run ${selected.length} selected scenario${selected.length === 1 ? '' : 's'}: ${clip(selected.join(', '), 80)}`
+
+  await askConfirm($, { action: 'run', only: selected, label, ...(rate !== undefined && { credits: rate * selected.length }) })
+}
+
+/** Exclude or include the selected scenarios (rook scenarios exclude|include): no credits, no confirm. */
+async function scenarioCurate($: EngineInterface, ctx: Ctx, verb: 'exclude' | 'include'): Promise<void> {
+  const selected = await read($, selectedAtom)
+
+  if (selected.length === 0) {
+    return
+  }
+
+  const text = await curateReply($, ctx, verb, selected)
+
+  ctx.scenarioList = undefined // the files changed under the same names
+  await update($, selectedAtom, () => [])
+  $.ui.toast(text.startsWith('rook') ? text : `rook: ${text}`)
+}
+
+/** One failing scenario handed to Claude, whichever run its newest verdict is from. */
+async function scenarioFix($: EngineInterface, ctx: Ctx, id: string): Promise<void> {
+  const loc = ctx.located ?? (await where($, ctx))
+  const current = (await read($, snapshotAtom))?.current.find(row => row.id === id)
+
+  if (loc === undefined || current === undefined) {
+    return
+  }
+
+  const { row, verdictPath } = await scenarioVerdict($, ctx, id, current.runId)
+
+  if (row === undefined || verdictPath === undefined) {
+    return
+  }
+
+  await $.prompt.submit({
+    text:
+      `rook run ${current.runId} against agent ${loc.agentId}:\n${scenarioFailureNote(row, verdictPath)}\n\n` +
+      `Fix this. If the evidence shows the criterion is wrong rather than the agent, say so. Then re-test with the rook run tool, passing only ${id}.`,
+  })
+}
+
+/** Ask Claude to pin a failure as a regression scenario of its feature, with the rook generate tool. */
+async function scenarioRegression($: EngineInterface, ctx: Ctx, id: string): Promise<void> {
+  const info = (await scenarioList($, ctx)).find(s => s.id === id)
+  const current = (await read($, snapshotAtom))?.current.find(row => row.id === id)
+
+  if (info === undefined) {
+    return
+  }
+
+  const verdict = current === undefined ? {} : await scenarioVerdict($, ctx, id, current.runId)
+
+  await $.prompt.submit({ text: regressionPrompt(info, verdict.row, verdict.verdictPath) })
+}
+
+async function scenarioAskFlaky($: EngineInterface, id: string): Promise<void> {
+  const rate = creditsPerScenario((await read($, snapshotAtom))?.latest)
+
+  await askConfirm($, {
+    action: 'flaky',
+    id,
+    times: FLAKY_DEFAULT,
+    label: `Re-run ${id} ${FLAKY_DEFAULT}× in a row (flaky check)`,
+    ...(rate !== undefined && { credits: rate * FLAKY_DEFAULT }),
+  })
+}
+
+/** The generate box: Enter passes the text, the button reads the draft. */
+async function scenarioGenerate($: EngineInterface, text?: string): Promise<void> {
+  if (text !== undefined) {
+    await update($, draftAtom, () => text)
+  }
+
+  const instruction = (text ?? (await read($, draftAtom))).trim()
+
+  if (instruction === '') {
+    $.ui.toast('rook: type what the new scenarios should cover first.')
+
+    return
+  }
+
+  await askConfirm($, { action: 'generate', instruction: instruction.slice(0, 2000), label: `Generate scenarios: ${clip(instruction, 80)}` })
+}
+
+/**
+ * A flaky check: one scenario run `times` times one after another, in the
+ * background, under the one-run-at-a-time rule. Each verdict lands in
+ * `flaky[id]`; verdicts that disagree mark the scenario flaky.
+ */
+async function flakyStart($: EngineInterface, ctx: Ctx, id: string, times: number, source: 'command' | 'pane'): Promise<string> {
+  if ((await read($, runningAtom)) !== null) {
+    return 'rook: a run is already in progress.'
+  }
+
+  const args = runArgs({ only: [id], name: `flaky check ${id}` }, ctx.approval)
+
+  if ('error' in args) {
+    return `rook: ${args.error}`
+  }
+
+  const unready = await setupBlock($, ctx, NEEDS.run, 'run')
+
+  if (unready !== undefined) {
+    return `rook: ${unready}`
+  }
+
+  const blocked = (await prodBlock($, ctx)) ?? (await budgetBlock($, ctx, 'run'))
+
+  if (blocked !== undefined) {
+    return blocked
+  }
+
+  const startedAt = await $.clock.now()
+
+  await update($, runningAtom, () => ({ startedAt, label: `${id} ×${times} (flaky check)`, source }))
+  await update($, lastErrorAtom, () => null)
+  await update($, flakyAtom, flaky => ({ ...flaky, [id]: [] }))
+  await showStatus($, ctx)
+  $.clock.after(0, () => flakyLoop($, ctx, id, times, args.argv))
+
+  return `rook: re-running ${id} ${times} times in a row in the background. The Scenarios tab marks it flaky if the verdicts disagree.`
+}
+
+async function flakyLoop($: EngineInterface, ctx: Ctx, id: string, times: number, argv: string[]): Promise<void> {
+  const verdicts: RookStatus[] = []
+  let problem: string | undefined
+
+  try {
+    for (let at = 0; at < times; at += 1) {
+      const blocked = at === 0 ? undefined : await budgetBlock($, ctx, 'run')
+
+      if (blocked !== undefined) {
+        problem = blocked
+        break
+      }
+
+      const result = await rookRun($, ctx, argv)
+      const loc = ctx.located ?? (await where($, ctx))
+      const said = (result.doc as { run_id?: unknown } | undefined)?.run_id
+      const runId = typeof said === 'string' && RUN_ID.test(said) ? said : loc === undefined ? undefined : (await runIds(ioOf($, ctx), loc.agentDir))[0]
+
+      if (runId !== undefined) {
+        await update($, seenAtom, () => runId) // reported here, not as a run that finished elsewhere
+      }
+
+      const status = runId === undefined ? undefined : (await scenarioVerdict($, ctx, id, runId)).row?.status
+
+      if (status === undefined) {
+        problem = failureOf(result) ?? `run ${at + 1} left no verdict for ${id}`
+        break
+      }
+
+      verdicts.push(status)
+      await update($, flakyAtom, flaky => ({ ...flaky, [id]: [...verdicts] }))
+    }
+  } catch (error) {
+    problem = `could not start ${ctx.bin} — ${clip(String(error), 120)}`
+  } finally {
+    await update($, runningAtom, () => null)
+    await poll($, ctx)
+    await refreshBalance($, ctx)
+  }
+
+  if (problem !== undefined) {
+    const at = await $.clock.now()
+
+    await update($, lastErrorAtom, () => ({ source: 'run', text: `flaky check of ${id}: ${clip(problem!, 400)}`, at }))
+  }
+
+  $.ui.toast(`rook: ${flakyText(id, verdicts, times)}`)
+}
+
+/** `/rook flaky <id> [times]`. */
+async function flakyReply($: EngineInterface, ctx: Ctx, args: string[]): Promise<string> {
+  const parsed = parseFlakyArgs(args)
+
+  return 'error' in parsed ? `rook: ${parsed.error}` : flakyStart($, ctx, parsed.id, parsed.times, 'command')
+}
+
+// ══ end feature: scenarios tab ═══════════════════════════════════════════════
+
+// ══ feature: setup tab (profile wizard, sync, budget) ════════════════════════
+
+/**
+ * Refuses a run or generate that the session's credit budget would not cover;
+ * undefined when allowed. Spent is the balance when the budget was set minus
+ * the balance now (`rook plan`), so it counts spending from a terminal too.
+ * A run's estimate is the latest run's credits per scenario times `count`
+ * (the scenarios asked for, or every scenario), else the latest run's credits.
+ */
+async function budgetBlock($: EngineInterface, ctx: Ctx, kind: 'run' | 'generate', count?: number): Promise<string | undefined> {
+  const budget = await read($, budgetAtom)
+
+  if (budget === null) {
+    return undefined
+  }
+
+  const spent = spentOf(budget, await refreshBalance($, ctx))
+
+  if (spent !== budget.spent) {
+    await update($, budgetAtom, now => (now === null ? null : { ...now, spent }))
+  }
+
+  const latest = (await read($, snapshotAtom))?.latest
+  const rate = creditsPerScenario(latest)
+  const planned = count ?? ctx.agentIndex?.scenarios.length ?? latest?.planned
+  const estimate =
+    kind === 'generate' ? GENERATE_ESTIMATE : rate !== undefined && planned !== undefined && planned > 0 ? rate * planned : latest?.finished ? latest.credits : undefined
+
+  return budgetRefusal({ ...budget, spent }, kind, estimate)
+}
+
+/** `/rook budget <credits>|off|status`. */
+async function budgetReply($: EngineInterface, ctx: Ctx, args: string[]): Promise<string> {
+  const parsed = parseBudget(args)
+
+  if (typeof parsed === 'object' && parsed !== null) {
+    return `rook: ${parsed.error}`
+  }
+
+  if (parsed === null) {
+    await update($, budgetAtom, () => null)
+
+    return 'rook: budget off. Runs and generates are limited only by the credit balance.'
+  }
+
+  const balance = await refreshBalance($, ctx)
+  const before = await read($, budgetAtom)
+
+  if (parsed === undefined) {
+    if (before === null) {
+      return `rook: ${budgetText(null, balance)}`
+    }
+
+    const spent = spentOf(before, balance)
+    await update($, budgetAtom, now => (now === null ? null : { ...now, spent }))
+
+    return `rook: ${budgetText({ ...before, spent }, balance)}`
+  }
+
+  // A raise keeps counting from when the budget was first set.
+  const startBalance = before?.startBalance ?? (balance === null ? undefined : balance)
+  const next = { limit: parsed, spent: 0, ...(startBalance !== undefined && { startBalance }) }
+  const budget = { ...next, spent: spentOf(next, balance) }
+
+  await update($, budgetAtom, () => budget)
+
+  return `rook: ${budgetText(budget, balance)}. Runs and generates that would go past it are refused.`
+}
+
+/** `rook status --json` as the Setup tab's sync state, or why it could not be read. */
+async function syncStatus($: EngineInterface, ctx: Ctx): Promise<SyncState | { failed: string }> {
+  const status = await rookJson($, ctx, ['status', '--json'])
+  const problem = failureOf(status)
+
+  return status.doc === undefined || problem !== undefined ? { failed: `rook status failed: ${problem ?? 'no output'}` } : syncStateOf(status.doc, await $.clock.now())
+}
+
+/** "Check sync state": `rook status --json`, no credits. */
+async function checkSync($: EngineInterface, ctx: Ctx): Promise<string> {
+  const blocked = await setupBlock($, ctx, NEEDS.status, 'read sync state')
+
+  if (blocked !== undefined) {
+    await update($, syncAtom, now => ({ checkedAt: now?.checkedAt ?? 0, offline: now?.offline ?? false, agents: now?.agents ?? [], error: blocked }))
+
+    return `rook: ${blocked}`
+  }
+
+  const state = await syncStatus($, ctx)
+
+  if ('failed' in state) {
+    await update($, syncAtom, now => ({ checkedAt: now?.checkedAt ?? 0, offline: now?.offline ?? false, agents: now?.agents ?? [], error: state.failed }))
+
+    return state.failed
+  }
+
+  await update($, syncAtom, () => state)
+
+  return syncStateText(state)
+}
+
+/**
+ * `/rook sync`, the pane's Sync upstream and the sync tool: `rook sync`
+ * records the project (every agent, or `agent`) upstream as one write, then
+ * `rook status --json` says where it stands. No credits: rook sends what is on
+ * disk to rook-api and calls no model and not the agent.
+ */
+async function syncReply($: EngineInterface, ctx: Ctx, agent?: string): Promise<string> {
+  const args = syncArgs(agent)
+
+  if ('error' in args) {
+    return `rook: ${args.error}`
+  }
+
+  const blocked = await setupBlock($, ctx, NEEDS.profileTest, 'sync')
+
+  if (blocked !== undefined) {
+    return `rook: ${blocked}`
+  }
+
+  const before = await read($, syncAtom)
+
+  if (before?.isSyncing === true) {
+    return 'rook: a sync is already in progress.'
+  }
+
+  await update($, syncAtom, now => ({ checkedAt: now?.checkedAt ?? 0, offline: now?.offline ?? false, agents: now?.agents ?? [], isSyncing: true }))
+
+  let text: string
+  let isFailed = false
+
+  try {
+    const result = await rookRun($, ctx, args.argv)
+
+    isFailed = result.exitCode !== 0
+    text = syncText(result.exitCode, result.stdout ?? '', result.stderr)
+
+    if (isFailed) {
+      text = await explained($, ctx, result, text, NEEDS.profileTest, 'sync')
+    }
+  } catch (error) {
+    isFailed = true
+    text = `rook sync failed: could not start ${ctx.bin} — ${clip(String(error), 120)}`
+  }
+
+  const state = await syncStatus($, ctx)
+  const head = text.split('\n')[0] ?? ''
+
+  await update($, syncAtom, now => ({
+    ...('failed' in state ? { checkedAt: now?.checkedAt ?? 0, offline: now?.offline ?? false, agents: now?.agents ?? [] } : state),
+    ...(isFailed ? { error: head } : { said: head }),
+  }))
+  ctx.isDirty = true
+  await poll($, ctx)
+
+  return 'failed' in state ? `${text}\n${state.failed}` : `${text}\n${syncStateText(state)}`
+}
+
+async function paneSync($: EngineInterface, ctx: Ctx): Promise<void> {
+  $.ui.toast(clip(await syncReply($, ctx), 300))
+}
+
+async function paneCheckSync($: EngineInterface, ctx: Ctx): Promise<void> {
+  await checkSync($, ctx)
+}
+
+async function paneUseProfile($: EngineInterface, ctx: Ctx, id: string): Promise<void> {
+  const answer = await profileReply($, ctx, { action: 'use', profile: id })
+
+  $.ui.toast(clip('deny' in answer ? answer.deny : answer.result, 200))
+}
+
+/** The Setup tab's Test: one call to the agent spends credits, so it waits behind the Confirm bar. */
+async function askProfileTest($: EngineInterface, id: string): Promise<void> {
+  await askConfirm($, { action: 'profile-test', profile: id, label: `Test profile ${id}: one call to your agent` })
+}
+
+/** The confirmed profile test, in the background like `/rook profile test`. Called from confirmNow. */
+async function paneProfileTest($: EngineInterface, ctx: Ctx, profile: string | undefined): Promise<void> {
+  const request: ProfileRequest = { action: 'test', ...(profile !== undefined && { profile }) }
+
+  $.ui.toast(`rook: testing ${profile ?? 'the active profile'}: one call to the agent. A toast says what came back.`)
+  $.clock.after(0, async () => {
+    const answer = await profileReply($, ctx, request).catch(error => ({ deny: `rook profile test failed: ${String(error)}` }))
+
+    $.ui.toast(clip('deny' in answer ? answer.deny : answer.result, 300))
+  })
+}
+
+/**
+ * What the Setup tab shows past the checklist, read from disk while drawing:
+ * the active agent's profiles, which are verified (`state.json`), which of
+ * their variables rook's env store has (names only), and a connection file in
+ * the repository root for the wizard.
+ */
+async function setupPanel($: EngineInterface, ctx: Ctx, canAct: boolean): Promise<SetupPanel | undefined> {
+  const loc = ctx.located ?? (await where($, ctx))
+
+  if (loc === undefined) {
+    return undefined
+  }
+
+  const io = ioOf($, ctx)
+  const ids = (await io.list(`${loc.agentDir}/profiles`))
+    .filter(entry => entry.kind === 'file' && entry.name.endsWith('.yaml'))
+    .map(entry => entry.name.replace(/\.yaml$/, ''))
+    .filter(id => /^[\w.][\w.-]{0,63}$/.test(id))
+  const texts = new Map<string, string>()
+
+  for (const id of ids) {
+    texts.set(id, (await io.read(`${loc.agentDir}/profiles/${id}.yaml`)) ?? '')
+  }
+
+  const named = (await io.read(`${loc.agentDir}/profiles/active`))?.trim()
+  const activeId = named !== undefined && ids.includes(named) ? named : ids.length === 1 ? ids[0] : undefined
+  const verified = verifiedProfiles(await io.read(`${loc.agentDir}/state.json`))
+  // Only the names leave variableValues here: a value is never drawn.
+  const isSet = new Set(Object.keys(await variableValues($, ctx, [...new Set([...texts.values()].flatMap(text => declaredVariables(text)))])))
+  const profiles = ids.map(id => profileView(id, texts.get(id) ?? '', id === activeId, verified.has(id), isSet))
+  let connectionFile: string | undefined
+
+  for (const name of CONNECTION_FILES) {
+    if ((await io.read(name)) !== undefined) {
+      connectionFile = name
+      break
+    }
+  }
+
+  return {
+    profiles,
+    wizard: wizardOf(profiles, connectionFile),
+    budgetLine: budgetText(await read($, budgetAtom), await read($, balanceAtom)),
+    sync: await read($, syncAtom),
+    canAct,
+  }
+}
+
+// ══ end feature: setup tab ═══════════════════════════════════════════════════
+
+// ══ feature: band (precise re-test) ══════════════════════════════════════════
+
+/** A band toggle: untick a scenario to leave it out of Re-test, tick it to bring it back. */
+async function toggleTicked($: EngineInterface, id: string): Promise<void> {
+  await update($, untickedAtom, ids => (ids.includes(id) ? ids.filter(other => other !== id) : [...ids, id]))
+}
+
+/** The band's Details: the affected scenarios, each with why it was picked. */
+async function toggleBandOpen($: EngineInterface): Promise<void> {
+  await update($, bandOpenAtom, isOpen => !isOpen)
+}
+
+// ══ end feature: band ════════════════════════════════════════════════════════
+
+// ══ feature: status line ═════════════════════════════════════════════════════
+
+/** The trend and ETA's recent finished runs, cached in ctx until the runs on disk change. */
+async function statusTrend($: EngineInterface, ctx: Ctx, snapshot: RookSnapshot | null): Promise<TrendPoint[]> {
+  const loc = ctx.located
+
+  if (snapshot === null || loc === undefined || snapshot.agentId !== loc.agentId) {
+    return []
+  }
+
+  const key = `${loc.agentDir}#${snapshot.runCount ?? 0}#${snapshot.latest?.runId ?? ''}#${snapshot.latest?.finished === true}`
+
+  if (ctx.statusTrend?.key !== key) {
+    const io = ioOf($, ctx)
+
+    ctx.statusTrend = { key, points: await trendOf(io, loc.agentDir, await runIds(io, loc.agentDir)) }
+  }
+
+  return ctx.statusTrend.points
+}
+// ══ end feature: status line ═════════════════════════════════════════════════
+
+// ══ feature: card (transcript verdict card) ══════════════════════════════════
+
+/** The run a tool result names, read from disk; undefined when it cannot be read. */
+async function cardRun($: EngineInterface, ctx: Ctx, runId: string): Promise<RookRunView | undefined> {
+  const loc = ctx.located ?? (await where($, ctx))
+
+  return loc === undefined ? undefined : readRun(ioOf($, ctx), loc.agentDir, runId, ctx.rows).catch(() => undefined)
+}
+
+/** The card's Open in pane: the Health tab, the pane open. */
+async function cardOpen($: EngineInterface): Promise<void> {
+  await setTab($, 'health')
+  await $.ui.open({ id: PANE, title: 'rook' }).catch(() => undefined)
+}
+
+/** The card's Fix with Claude: the run's failures, read afresh from disk, handed to Claude. */
+async function cardFix($: EngineInterface, ctx: Ctx, runId: string): Promise<void> {
+  const run = await cardRun($, ctx, runId)
+
+  if (run !== undefined && run.counts.fail > 0) {
+    await fixWithClaude($, ctx, run)
+  }
+}
+
+/** A finished run's tool result drawn as a card; the engine's own block where anything is missing. */
+async function cardRender($: EngineInterface, ctx: Ctx, e: RenderInput<'ToolResult'>): Promise<RenderElement | undefined> {
+  if (e.props.isErrored) {
+    return undefined
+  }
+
+  const runId = runIdOf(e.props.output)
+  const run = runId === undefined ? undefined : await cardRun($, ctx, runId)
+
+  if (runId === undefined || run === undefined || !run.finished) {
+    return undefined
+  }
+
+  const resolved = $.ui.resolve(e) as unknown as Partial<El>
+
+  if (resolved.Box === undefined || resolved.Text === undefined || resolved.Button === undefined) {
+    return undefined
+  }
+
+  return <VerdictCard el={resolved as El} card={cardFacts(run)} onOpen={() => cardOpen($)} onFix={() => cardFix($, ctx, runId)} />
+}
+
+/** The run tool's own row while Claude's run is in flight: judged so far and the lanes. */
+async function cardProgressRender($: EngineInterface, e: RenderInput<'ToolUse'>): Promise<RenderElement | undefined> {
+  if (!e.props.isRunning) {
+    return undefined
+  }
+
+  const running = await read($, runningAtom)
+  const run = (await read($, snapshotAtom))?.latest
+
+  if (running?.source !== 'tool' || run === undefined || run.finished) {
+    return undefined
+  }
+
+  await read($, tickAtom)
+  const resolved = $.ui.resolve(e) as unknown as Partial<El>
+
+  if (resolved.Box === undefined || resolved.Text === undefined) {
+    return undefined
+  }
+
+  return <RunProgressRow el={resolved as El} progress={cardProgress(run)} />
+}
+// ══ end feature: card ════════════════════════════════════════════════════════
+
+// ══ feature: ci ══════════════════════════════════════════════════════════════
+
+/** `/rook ci`: write a CI workflow that runs rook on pull requests. */
+async function ciReply($: EngineInterface, ctx: Ctx, args: string[]): Promise<string> {
+  const request = parseCiArgs(args)
+
+  return 'error' in request ? `rook: ${request.error}` : ciAnswer($, ctx, request)
+}
+
+/** What the workflow needs from this workspace: the active profile's variable names, the installed build. Never a value. */
+async function ciPlan($: EngineInterface, ctx: Ctx, request: CiRequest): Promise<CiPlan | undefined> {
+  const loc = ctx.located ?? (await where($, ctx))
+
+  if (loc === undefined) {
+    return undefined
+  }
+
+  const target = await profileOf($, ctx)
+  const profileText = target === undefined ? undefined : await ioOf($, ctx).read(`${loc.agentDir}/profiles/${target.profileId}.yaml`)
+  // `rook --version` prints the build's commit; readiness keeps only a semver, so ask again.
+  const version = await $.process
+    .run([ctx.bin, '--version'], { env: CLI_ENV, stdin: '', timeoutMs: 10_000 })
+    .then(ran => (ran.exitCode === 0 ? /\b[0-9a-f]{7,40}\b/.exec(ran.stdout)?.[0] : undefined))
+    .catch(() => undefined)
+
+  return {
+    ...(target !== undefined && profileText !== undefined && { profileId: target.profileId }),
+    variables: profileText === undefined ? [] : declaredVariables(profileText),
+    ...(version !== undefined && { version }),
+    allowRules: ctx.approval.allowRules,
+    failOnUnverifiable: request.failOnUnverifiable,
+  }
+}
+
+/** Preview, or write the workflow when asked and nothing is there (or `force`). Shared by /rook ci and the ci tool. */
+async function ciAnswer($: EngineInterface, ctx: Ctx, request: CiRequest): Promise<string> {
+  const plan = await ciPlan($, ctx, request)
+
+  if (plan === undefined) {
+    return 'rook: no rook workspace here. /rook ci writes a workflow for the agent set up in this directory (/rook explore sets one up).'
+  }
+
+  const yaml = workflowYaml(plan)
+  const path = ctx.cwd === '' ? WORKFLOW_PATH : `${ctx.cwd.replace(/\/$/, '')}/${WORKFLOW_PATH}`
+  const exists = await $.fs.exists(path).catch(() => false)
+
+  if (!request.write) {
+    return previewText(plan, yaml, exists)
+  }
+
+  if (exists && !request.force) {
+    return `rook: ${WORKFLOW_PATH} exists already and was left as it is. /rook ci shows what would replace it; /rook ci write --force replaces it.`
+  }
+
+  try {
+    await $.fs.write(path, yaml)
+  } catch (error) {
+    return `rook: could not write ${WORKFLOW_PATH}: ${clip(String(error), 200)}`
+  }
+
+  return writtenText(plan)
+}
+
+// ══ end feature: ci ══════════════════════════════════════════════════════════
+
 const APPROVALS_NOTE =
   "rook's own tool calls during the command (reading the agent's code, running its commands) are approved with --yes, " +
   'unless the person set allowRules, in which case only those are approved and rook declines the rest.'
@@ -1619,8 +2841,10 @@ export const register: Register = (on, options) => {
 
     await $.command.register({
       name: 'rook',
-      description: 'rook agent testing: pane, status, runs, scenarios, agent, report, explain, run, generate, project, explore, profile, ui, confirm-prod',
-      argumentHint: '[pane|status|runs|scenarios [exclude|include]|agent [use]|report|explain [--rca]|run|generate|project|explore|profile|ui|confirm-prod|help]',
+      description:
+        'rook agent testing: pane, tab, status, runs, compare, scenarios, flaky, agent, report, explain, run, generate, project, explore, profile, sync, budget, ci, ui, confirm-prod',
+      argumentHint:
+        '[pane|tab <name>|status|runs|compare|scenarios [exclude|include]|flaky <id>|agent [use]|report|explain [--rca]|run|generate|project|explore|profile|sync|budget|ci|ui|confirm-prod|help]',
     })
     await $.tool.register({
       name: 'run',
@@ -1771,6 +2995,65 @@ export const register: Register = (on, options) => {
       },
     })
 
+    // ── tool registrations: runs tab
+    await $.tool.register({
+      name: 'compare',
+      description:
+        'Compare two rook runs of the agent under test, reading only the files on disk (no credits, no rook CLI call, no agent call). ' +
+        'Per scenario: fixed (Fail or Unable to Verify → Pass), regressed (Pass → Fail or Unable to Verify), new in head, missing from head, still failing; ' +
+        'plus the Pass / Fail / Unable to Verify, pass-rate and credits deltas. Defaults to the two newest finished runs; ' +
+        'with only base, head is the newest run; with only head, base is the run before it. The rook runs tool lists run ids.',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          base: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}Z(-\\d+)?$', description: 'The earlier run id' },
+          head: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}Z(-\\d+)?$', description: 'The later run id' },
+        },
+      },
+    })
+    // ── end tool registrations: runs tab
+
+    // ── tool registrations: setup tab
+    await $.tool.register({
+      name: 'sync',
+      description:
+        'Record this rook project upstream (rook sync): every agent\'s features, scenarios and profiles as one write, or one agent with `agent`. ' +
+        'explore and generate write on disk only, and a run needs what it tests recorded, so sync after them when rook says the tree is not recorded. ' +
+        'Returns what was recorded and where each agent now stands. With check: true it only reports the sync state (rook status) and writes nothing. ' +
+        'No credits: it calls no model and not the agent.',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          agent: { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$', description: 'Only this agent. Default: every agent on disk' },
+          check: { type: 'boolean', description: 'Only report the sync state; record nothing' },
+        },
+      },
+    })
+    // ── end tool registrations: setup tab
+
+    // ── tool registrations: ci
+    await $.tool.register({
+      name: 'ci',
+      description:
+        `Make rook a pull-request check: a GitHub Actions workflow (${WORKFLOW_PATH}) that installs rook, signs in from repository secrets, ` +
+        "runs the agent's functional scenarios (or the ROOK_ONLY ids) with rook run --test --json, uploads the run folder, and fails on Fail verdicts " +
+        '(Unable to Verify too when fail_on_unverifiable). Without write it previews: the path, the secret names the person must add, and the YAML. ' +
+        'With write it writes the file, unless one exists (force replaces it). No credits, no agent call. Secret values never go in the file: ' +
+        'tell the person which secrets to add; do not ask them for the values.',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          write: { type: 'boolean', description: 'Write the workflow file; default false (preview only)' },
+          force: { type: 'boolean', description: 'With write: replace an existing workflow file' },
+          fail_on_unverifiable: { type: 'boolean', description: 'Fail the check on Unable to Verify as well as on Fail' },
+        },
+      },
+    })
+    // ── end tool registrations: ci
+
     await poll($, ctx)
     ctx.isPrimed = true
     $.clock.every(POLL_MS, () => poll($, ctx))
@@ -1897,6 +3180,34 @@ export const register: Register = (on, options) => {
     return profileReply($, ctx, request, next.signal)
   })
 
+  // ── tool handlers: runs tab
+  on('tool.call', { tool: COMPARE_TOOL }, async ($, e) => {
+    const { base, head } = e as unknown as { base?: unknown; head?: unknown }
+
+    return { result: await compareRuns($, ctx, typeof base === 'string' ? base : undefined, typeof head === 'string' ? head : undefined) }
+  })
+  // ── end tool handlers: runs tab
+
+  // ── tool handlers: setup tab
+  on('tool.call', { tool: SYNC_TOOL }, async ($, e) => {
+    const { agent, check } = e as unknown as { agent?: unknown; check?: unknown }
+
+    if (check === true) {
+      return { result: await checkSync($, ctx) }
+    }
+
+    return { result: await syncReply($, ctx, agent === undefined ? undefined : String(agent)) }
+  })
+  // ── end tool handlers: setup tab
+
+  // ── tool handlers: ci
+  on('tool.call', { tool: CI_TOOL }, async ($, e) => {
+    const { write, force, fail_on_unverifiable: strict } = e as unknown as { write?: unknown; force?: unknown; fail_on_unverifiable?: unknown }
+
+    return { result: await ciAnswer($, ctx, { write: write === true, force: force === true, failOnUnverifiable: strict === true }) }
+  })
+  // ── end tool handlers: ci
+
   // 7 · production guard over the model's shell
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     if (!isRunCommand(e.command)) {
@@ -1929,12 +3240,27 @@ export const register: Register = (on, options) => {
     return { ...answer, text: answer.text.replace(/^rook(?::\s*|\s+)/, '') }
   })
 
+  // ── render hooks: card
+  // The model reads the result text unchanged; these draw it differently, and hand back the engine's own row when they cannot.
+  on('ui.render', { component: 'ToolResult', props: { tool: CARD_TOOL } }, async ($, e, next) => (await cardRender($, ctx, e)) ?? next(e))
+  on('ui.render', { component: 'ToolUse', props: { tool: CARD_RUN_TOOL } }, async ($, e, next) => (await cardProgressRender($, e)) ?? next(e))
+  // ── end render hooks: card
+
   // 2 · the turn's spinner: where Claude's rook run is, at any terminal width
   on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
     const running = await read($, runningAtom)
 
     if (running === null || running.source !== 'tool') {
-      return next(e)
+      // Claude waiting on a generate or explore: where it is, instead of the word.
+      const job = liveJob(await read($, jobAtom))
+
+      if (job === null || job.source !== 'tool') {
+        return next(e)
+      }
+
+      await read($, tickAtom)
+
+      return next({ ...e, props: { ...e.props, message: jobSpinnerText(job, await $.clock.now()) } })
     }
 
     await read($, tickAtom)
@@ -1946,7 +3272,9 @@ export const register: Register = (on, options) => {
 
   // 2 · the live pane
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text, Button, Link, Markdown } = $.ui.resolve(e)
+    const resolved = $.ui.resolve(e)
+    const { Box, Text, Button, Link, Markdown } = resolved
+    const el = resolved as unknown as El
     const snapshot = await read($, snapshotAtom)
     const running = await read($, runningAtom)
     const expanded = await read($, expandedAtom)
@@ -1955,9 +3283,19 @@ export const register: Register = (on, options) => {
     const agents = await read($, agentsAtom)
     const balance = balanceText(await read($, balanceAtom))
     const explaining = await read($, explainingAtom)
+    const tab = await read($, tabAtom)
+    const confirm = await read($, confirmAtom)
     await read($, tickAtom)
     const now = await $.clock.now()
     const width = Math.max(20, e.props.bodyColumns)
+
+    // ── pane seam: progress
+    const job = liveJob(await read($, jobAtom))
+    const jobView = job === null ? null : <JobLanes el={el} job={job} now={now} width={width} />
+    // ── end pane seam: progress
+
+    const confirmView =
+      confirm === null ? null : <ConfirmBar el={el} confirm={confirm} onConfirm={() => confirmNow($, ctx)} onCancel={() => update($, confirmAtom, () => null)} />
     const readiness = snapshot?.readiness
     const failedBefore = lastError !== null && (
       <Box key="last-error">
@@ -1969,40 +3307,135 @@ export const register: Register = (on, options) => {
 
     // No agent to show: the setup checklist, the next step highlighted.
     if (snapshot === null || snapshot.agentId === undefined) {
-      const nextId = readiness?.steps.find(step => !step.ok)?.id
-      const isCliStep = nextId === 'installed' || nextId === 'signed_in'
-
       return (
         <Box flexDirection="column">
-          <Text bold>rook · setup</Text>
-          {readiness === undefined && <Text dimColor>Checking this directory…</Text>}
-          {readiness?.steps.map(step => (
-            <Box key={`s-${step.id}`}>
-              <Text color={step.ok ? 'green' : step.id === nextId ? 'yellow' : undefined} dimColor={!step.ok && step.id !== nextId} bold={step.id === nextId}>
-                {step.ok ? '✓' : '✗'} {step.label}
-              </Text>
-            </Box>
-          ))}
-          {readiness?.next !== undefined && (
-            <Box key="next">
-              <Text wrap="wrap">
-                <Text bold>Next: </Text>
-                {readiness.next}
-              </Text>
-            </Box>
-          )}
+          <SetupTab el={el} readiness={readiness} onRecheck={() => recheck($, ctx)} />
           {failedBefore}
-          {isCliStep && <Button key="recheck" label="Check again" onPress={() => recheck($, ctx)} />}
+          {jobView}
+          {confirmView}
         </Box>
       )
     }
 
+    const header = (
+      <Text bold wrap="truncate-end">
+        rook · {snapshot.agentId ?? ''}
+        {snapshot.profileId ? <Text dimColor> · profile {snapshot.profileId}</Text> : ''}
+        {balance !== undefined ? <Text dimColor> · {balance}</Text> : ''}
+      </Text>
+    )
+    const frame = (body: unknown) => (
+      <Box flexDirection="column">
+        {header}
+        <TabBar el={el} tab={tab} onTab={next => setTab($, next)} />
+        {failedBefore}
+        {jobView}
+        {confirmView}
+        {body as never}
+      </Box>
+    )
+
+    // ── pane seam: runs tab
+    if (tab === 'runs') {
+      const history = await read($, historyAtom)
+      const runOpen = await read($, runOpenAtom)
+      const compare = await read($, compareAtom)
+      const runDiff = await read($, runDiffAtom)
+
+      return frame(
+        <RunsTab
+          el={el}
+          history={history}
+          open={runOpen}
+          compare={compare}
+          diff={runDiff}
+          explaining={explaining}
+          onOpen={runId => openRun($, ctx, runId)}
+          onBack={() => closeRun($)}
+          onReport={() => reportRun($, ctx)}
+          onExplain={() => explainRun($, ctx)}
+          onCompareWith={() => compareWith($)}
+          onPick={runId => pickRun($, ctx, runId)}
+          onClearCompare={() => clearCompare($)}
+        />,
+      )
+    }
+    // ── end pane seam: runs tab
+
+    // ── pane seam: scenarios tab
+    if (tab === 'scenarios') {
+      const filter = await read($, filterAtom)
+      const selected = await read($, selectedAtom)
+      const flaky = await read($, flakyAtom)
+      const draft = await read($, draftAtom)
+      const openId = await read($, scenarioDetailAtom)
+      const views = withVerdicts(await scenarioList($, ctx), snapshot.current)
+      const shown = filterScenarios(views, filter)
+      const open = openId === null ? undefined : views.find(view => view.id === openId)
+      const detail: ScenarioDetail | undefined =
+        open === undefined ? undefined : { scenario: open, ...(open.runId === undefined ? {} : await scenarioVerdict($, ctx, open.id, open.runId)) }
+
+      return frame(
+        <ScenariosTab
+          el={el}
+          rows={shown}
+          total={views.length}
+          filter={filter}
+          selected={selected}
+          flaky={flaky}
+          detail={detail}
+          draft={draft}
+          canRun={running === null && blockedText(readiness, NEEDS.run, 'run') === undefined}
+          rate={creditsPerScenario(snapshot.latest)}
+          width={width}
+          onFilter={next => update($, filterAtom, () => (isFilter(next) ? next : 'all'))}
+          onToggle={id => update($, selectedAtom, ids => toggled(ids, id))}
+          onOpen={id => update($, scenarioDetailAtom, was => (was === id ? null : id))}
+          onSelectAll={() => update($, selectedAtom, ids => withAll(ids, shown.map(view => view.id)))}
+          onClear={() => update($, selectedAtom, () => [])}
+          onRunSelected={() => scenarioRunSelected($)}
+          onCurate={verb => scenarioCurate($, ctx, verb)}
+          onFix={id => scenarioFix($, ctx, id)}
+          onRegression={id => scenarioRegression($, ctx, id)}
+          onFlaky={id => scenarioAskFlaky($, id)}
+          onDraft={text => update($, draftAtom, () => text)}
+          onGenerate={text => scenarioGenerate($, text)}
+        />,
+      )
+    }
+    // ── end pane seam: scenarios tab
+
+    // ── pane seam: setup tab
+    if (tab === 'setup') {
+      const panel = await setupPanel($, ctx, running === null && explaining === null)
+
+      return frame(
+        <SetupTab
+          el={el}
+          readiness={readiness}
+          onRecheck={() => recheck($, ctx)}
+          panel={panel}
+          actions={{
+            onUse: id => paneUseProfile($, ctx, id),
+            onTest: id => askProfileTest($, id),
+            onSync: () => paneSync($, ctx),
+            onCheckSync: () => paneCheckSync($, ctx),
+            onRefresh: () => $.ui.invalidate('ui.render'),
+          }}
+        />,
+      )
+    }
+    // ── end pane seam: setup tab
+
+    // The Health tab. ── pane seam: health (owned by the health feature, through the end of this hook)
     // Results can be read while rook would refuse to run (no project selected, signed out…): say so, offer no run.
     const runBlock = blockedText(readiness, NEEDS.run, 'run')
 
     const run = snapshot.latest
     const failed = run?.rows.filter(row => row.status === 'Fail') ?? []
     const gaps = run === undefined ? [] : unlooked(run)
+    const gapGroupsNow = gapGroups(gaps)
+    const scenarioCount = snapshot.current.length + snapshot.neverRun
     const clusters = run?.finished ? orderedClusters(run).filter(cluster => cluster.kind !== 'unverifiable' || isExplained(cluster)) : []
     const clustered = new Set(clusters.flatMap(cluster => cluster.scenarios.map(s => s.id)))
     const loose = failed.filter(row => !clustered.has(row.id))
@@ -2081,13 +3514,8 @@ export const register: Register = (on, options) => {
       return run !== undefined ? <Button key={`fix-${id}`} label="Fix this with Claude" onPress={() => fixOne($, ctx, run, id)} /> : null
     }
 
-    return (
+    return frame(
       <Box flexDirection="column">
-        <Text bold wrap="truncate-end">
-          rook · {snapshot.agentId ?? ''}
-          {snapshot.profileId ? <Text dimColor> · profile {snapshot.profileId}</Text> : ''}
-          {balance !== undefined ? <Text dimColor> · {balance}</Text> : ''}
-        </Text>
         {agents.length > 1 && (
           <Box flexDirection="row" gap={1}>
             <Text dimColor>agents</Text>
@@ -2113,7 +3541,6 @@ export const register: Register = (on, options) => {
             </Text>
           </Box>
         )}
-        {failedBefore}
         {snapshot.current.length > 0 && (
           <Box flexDirection="row" gap={2}>
             <Text dimColor>agent</Text>
@@ -2164,9 +3591,12 @@ export const register: Register = (on, options) => {
           </Text>
         )}
         {running !== null && (
-          <Text color="cyan">
-            ▸ running {running.label} · {duration(Math.max(0, now - running.startedAt))}
-          </Text>
+          <Box key="running" flexDirection="row" gap={1}>
+            <Text color="cyan" wrap="truncate-end">
+              ▸ running {running.label} · {duration(Math.max(0, now - running.startedAt))}
+            </Text>
+            {running.source !== 'tool' && <Button key="cancel-run" label="Cancel" role="dismiss" onPress={() => cancelRun($, ctx)} />}
+          </Box>
         )}
         {run !== undefined &&
           !run.finished &&
@@ -2212,15 +3642,43 @@ export const register: Register = (on, options) => {
             </Text>
           </Box>
         ))}
-        {gaps.length > 0 && <Text bold>What nobody looked at</Text>}
-        {gaps.slice(0, 8).map(row => (
-          <Box key={`g-${row.id}`}>
-            <Text dimColor wrap="truncate-end">
-              ? {row.id}
-              {row.reason ? ` (${reasonText(row.reason)})` : ''} {gapText(row, width)}
-            </Text>
-          </Box>
-        ))}
+        {gapGroupsNow.length > 0 && <Text bold>What nobody looked at</Text>}
+        {run !== undefined &&
+          gapGroupsNow.map(group => (
+            <Box key={`uv-${group.cause}`} flexDirection="column">
+              <Text color="yellow" wrap="truncate-end">
+                ? {group.title} ({group.rows.length})
+              </Text>
+              {group.rows.slice(0, 6).map(row => (
+                <Box key={`g-${row.id}`} paddingLeft={2}>
+                  <Text dimColor wrap="truncate-end">
+                    {row.id}
+                    {row.reason ? ` (${reasonText(row.reason)})` : ''} {notesOf(row).length > 0 ? clip(notesOf(row).join('; '), width) : gapText(row, width)}
+                  </Text>
+                </Box>
+              ))}
+              <Box key={`uv-remedy-${group.cause}`} paddingLeft={2}>
+                <Text wrap="wrap">→ {group.remedy}</Text>
+              </Box>
+              <Box flexDirection="row" gap={1} paddingLeft={2}>
+                <Button key={`uv-fix-${group.cause}`} label="Fix with Claude" onPress={() => fixUnverified($, ctx, run, group.cause)} />
+                {canAct && (
+                  <Button
+                    key={`uv-retest-${group.cause}`}
+                    label={`Re-test ${group.rows.length === 1 ? 'this 1' : `these ${group.rows.length}`}`}
+                    onPress={() =>
+                      confirmRun(
+                        $,
+                        run,
+                        `Re-test ${plural(group.rows.length, 'scenario')}`,
+                        group.rows.map(row => row.id),
+                      )
+                    }
+                  />
+                )}
+              </Box>
+            </Box>
+          ))}
         {run?.finished && run.next.length > 0 && <Text bold>Next</Text>}
         {run?.finished &&
           run.next.slice(0, 3).map((step, at) => (
@@ -2229,9 +3687,21 @@ export const register: Register = (on, options) => {
             </Text>
           ))}
         <Box flexDirection="row" gap={1}>
-          {canAct && <Button key="run-all" label="Run all" hotkey="r" onPress={() => paneRun($, ctx, {})} />}
+          {canAct && (
+            <Button
+              key="run-all"
+              label="Run all"
+              hotkey="r"
+              onPress={() => confirmRun($, run, scenarioCount > 0 ? `Run all ${plural(scenarioCount, 'scenario')}` : 'Run all scenarios', undefined, scenarioCount)}
+            />
+          )}
           {canAct && failing.length > 0 && (
-            <Button key="rerun-failed" label="Re-run failed" hotkey="f" onPress={() => paneRun($, ctx, { only: failing })} />
+            <Button
+              key="rerun-failed"
+              label="Re-run failed"
+              hotkey="f"
+              onPress={() => confirmRun($, run, `Re-run ${plural(failing.length, 'failed scenario')}`, failing)}
+            />
           )}
           {failed.length > 0 && run !== undefined && (
             <Button key="fix" label="Fix with Claude" variant="primary" hotkey="x" onPress={() => fixWithClaude($, ctx, run)} />
@@ -2262,15 +3732,21 @@ export const register: Register = (on, options) => {
       return next(e)
     }
 
-    const { Box, Text, Button } = $.ui.resolve(e)
+    const unticked = await read($, untickedAtom)
+    const isOpen = await read($, bandOpenAtom)
 
     return (
-      <Box flexDirection="row" gap={1}>
-        <Text color="yellow">◆ rook</Text>
-        <Text wrap="truncate-end">{staleLine(stale)}</Text>
-        <Button key="retest" label="Re-test" variant="primary" onPress={() => retest($)} />
-        <Button key="dismiss" label="Dismiss" role="dismiss" onPress={() => update($, bandHiddenAtom, () => true)} />
-      </Box>
+      <RetestBand
+        el={$.ui.resolve(e)}
+        stale={stale}
+        unticked={unticked.filter(id => stale.scenarios.some(s => s.id === id))}
+        isOpen={isOpen}
+        columns={e.props.bodyColumns}
+        onToggle={id => toggleTicked($, id)}
+        onRetest={() => retest($)}
+        onDetails={() => toggleBandOpen($)}
+        onDismiss={() => update($, bandHiddenAtom, () => true)}
+      />
     )
   })
 }
