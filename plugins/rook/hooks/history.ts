@@ -95,6 +95,7 @@ export function diffRuns(base: DiffSide, head: DiffSide): RunDiff {
     added: [],
     missing: [],
     stillFailing: [],
+    stillUnverified: [],
     stillPassing: 0,
     delta: {
       pass: head.counts.pass - base.counts.pass,
@@ -120,8 +121,10 @@ export function diffRuns(base: DiffSide, head: DiffSide): RunDiff {
       diff.fixed.push(row)
     } else if (was.status === 'Pass') {
       diff.regressed.push(row)
-    } else {
+    } else if (now.status === 'Fail') {
       diff.stillFailing.push(row)
+    } else {
+      diff.stillUnverified!.push(row)
     }
   }
 
@@ -208,8 +211,9 @@ export function compareText(agentId: string, diff: RunDiff): string {
     ...section('Fixed (Fail or Unable to Verify → Pass)', diff.fixed),
     ...section('Regressed (Pass → Fail or Unable to Verify)', diff.regressed),
     ...section('New in head', diff.added),
-    ...section('Missing from head', diff.missing),
+    ...section('Not re-run in head', diff.missing),
     ...section('Still failing', diff.stillFailing),
+    ...section('Still Unable to Verify (not Fail)', diff.stillUnverified ?? []),
     `${diff.stillPassing} still passing.`,
     'Unable to Verify is not Fail. Read either run with the rook report tool and its run_id.',
   ].join('\n')

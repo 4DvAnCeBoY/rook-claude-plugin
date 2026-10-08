@@ -233,8 +233,10 @@ declare module 'claude-code' {
         added: { id: string; title: string; base?: RookStatus; head?: RookStatus }[]
         /** Judged in base only. */
         missing: { id: string; title: string; base?: RookStatus; head?: RookStatus }[]
-        /** Not Pass in both. */
+        /** Not Pass in base, Fail in head. */
         stillFailing: { id: string; title: string; base?: RookStatus; head?: RookStatus }[]
+        /** Not Pass in base, Unable to Verify in head: not a Fail. */
+        stillUnverified?: { id: string; title: string; base?: RookStatus; head?: RookStatus }[]
         /** Pass in both. */
         stillPassing: number
         delta: { pass: number; fail: number; unverifiable: number; passRate?: number; credits?: number }
@@ -246,6 +248,8 @@ declare module 'claude-code' {
       filter: string
       draft: string
       flaky: Record<string, RookStatus[]>
+      /** The scenario's newest verdict from before its flaky check, which counts toward the judgement. */
+      flakyPrior: Record<string, RookStatus>
       /** The scenario opened in the Scenarios tab. */
       scenarioDetail: string | null
       // ── end feature: scenarios tab

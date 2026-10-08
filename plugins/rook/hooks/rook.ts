@@ -378,7 +378,10 @@ export function failureOf(result: CliResult): string | undefined {
   const doc = result.doc as { ok?: boolean; error?: string; reason?: string; remedy?: string; discarded?: string } | undefined
 
   if (doc?.discarded) {
-    return `the run was ${doc.discarded}${doc.reason ? `: ${doc.reason}` : ''} — nothing ran`
+    // rook refuses a recorded run of a project whose disk is ahead of what was synced.
+    const sync = /upstream/i.test(doc.reason ?? '') ? '. Record it first with /rook sync (no credits), or Sync upstream in the Setup tab' : ''
+
+    return `the run was ${doc.discarded}${doc.reason ? `: ${doc.reason}` : ''} — nothing ran${sync}`
   }
 
   if (result.exitCode === 0 && doc?.ok !== false) {

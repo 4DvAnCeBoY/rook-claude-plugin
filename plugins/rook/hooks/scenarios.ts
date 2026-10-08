@@ -142,15 +142,21 @@ export function parseFlakyArgs(args: readonly string[]): { id: string; times: nu
   return Number.isInteger(n) && n >= 2 && n <= FLAKY_MAX ? { id, times: n } : { error: `times is a whole number from 2 to ${FLAKY_MAX}.` }
 }
 
-/** What a finished flaky check says. */
-export function flakyText(id: string, verdicts: readonly RookStatus[], times: number): string {
+/** What a finished flaky check says; `prior` is the scenario's newest verdict from before the check. */
+export function flakyText(id: string, verdicts: readonly RookStatus[], times: number, prior?: RookStatus): string {
   const said = verdicts.join(', ')
 
   if (verdicts.length < times) {
     return `flaky check of ${id} stopped after ${verdicts.length}/${times} runs${said ? `: ${said}` : ''}.`
   }
 
-  return isFlaky(verdicts) ? `${id} is FLAKY: ${times} runs disagreed (${said}).` : `${id} is stable: ${times} runs, all ${verdicts[0] ?? '?'}.`
+  const before = prior === undefined ? '' : `earlier ${prior}, then `
+
+  if (isFlaky(prior === undefined ? verdicts : [prior, ...verdicts])) {
+    return isFlaky(verdicts) ? `${id} is FLAKY: ${before}${times} runs disagreed (${said}).` : `${id} is FLAKY: ${before}${said}. Its verdict changed between runs.`
+  }
+
+  return `${id} is stable: ${before}${times} runs, all ${verdicts[0] ?? '?'}.`
 }
 
 /** The instruction for `rook generate` that turns a failure into a regression scenario of its feature. */

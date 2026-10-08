@@ -254,7 +254,7 @@ describe('scenarios tab · the pane', () => {
       expect(runs).toHaveLength(3)
       expect(runs.every(argv => argv.join(' ').includes('--only SC-004'))).toBe(true)
       expect(world.toasts.at(-1)).toContain('SC-004 is FLAKY')
-      expect(await ui.find({ text: /flaky check: Pass, Fail, Pass · flaky/ })).toBeDefined()
+      expect(await ui.find({ text: /flaky check: earlier Fail, then Pass, Fail, Pass · flaky/ })).toBeDefined()
       expect((await ui.find({ key: 'sc-SC-004' }))?.text).toContain('flaky')
       await ui.unmount()
     })

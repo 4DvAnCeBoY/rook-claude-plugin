@@ -108,6 +108,13 @@ function Profiles(props: { el: El; panel: SetupPanel & SetupActions }) {
               ))}
             </Box>
           )}
+          {profile.variables.some(variable => !variable.isSet) && (
+            <Box key={`pe-${profile.id}`} paddingLeft={2}>
+              <Text wrap="wrap">
+                type: {`! rook env set '{${profile.variables.filter(variable => !variable.isSet).map(variable => `"${variable.name}":"…"`).join(',')}}'`}
+              </Text>
+            </Box>
+          )}
           <Box flexDirection="row" gap={1}>
             {!profile.isActive && panel.canAct && <Button key={`use-${profile.id}`} label="Use" onPress={() => panel.onUse(profile.id)} />}
             {panel.canAct && <Button key={`test-${profile.id}`} label="Test" onPress={() => panel.onTest(profile.id)} />}

@@ -1,5 +1,5 @@
 import type { RookBudget, RookJob, RookRunning, RookRunView, RookSnapshot, RookStale } from '../types'
-import { creditsPerScenario, duration, joinParts, statusParts } from './format'
+import { creditsPerScenario, duration, joinParts, statusParts, elapsed } from './format'
 import type { StatusPart } from './format'
 import type { Io } from './workspace'
 import { isMap, num, parseMap } from './yaml'
@@ -165,7 +165,7 @@ export const budgetText = (budget: RookBudget): string => `${Math.round(budget.s
 export function jobText(job: RookJob, now: number): string {
   const count = job.planned !== undefined && job.planned > 0 ? ` · ${job.done ?? 0}/${job.planned}` : ''
 
-  return `▸ ${job.kind}${count} · ${duration(Math.max(0, now - job.startedAt))}`
+  return `▸ ${job.kind}${count} · ${elapsed(Math.max(0, now - job.startedAt))}`
 }
 
 /**
