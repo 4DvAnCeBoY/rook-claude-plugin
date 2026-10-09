@@ -100,7 +100,8 @@ export function worldOf(on: On, files: Readonly<Record<string, string>>, env: Re
   on('env.get', ($, e) => ({ value: env[e.name] }))
 
   on('process.run', ($, e) => {
-    if (world.isMissingBinary) {
+    // Missing from PATH: the bare name does not start; a full path to a file on the disk does.
+    if (world.isMissingBinary && !(e.argv[0]?.startsWith('/') && world.files.has(e.argv[0]))) {
       return { deny: `ENOENT: ${e.argv[0]}` }
     }
 
