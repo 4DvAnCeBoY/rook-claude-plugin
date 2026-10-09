@@ -154,6 +154,8 @@ import {
   allowRulesOf,
   balanceOf,
   CLI_ENV,
+  cliEnvFor,
+  rookLocations,
   curateArgs,
   exploreArgs,
   failureOf,
@@ -385,6 +387,8 @@ type Ctx = {
   lensDefault: RookLens
   /** The runs the verdict history was last read from, to skip re-reading when nothing changed. */
   verdictSignature?: string
+  /** rook's environment: the bare defaults, or its folder put first on PATH when it was found outside PATH. */
+  cliEnv: Record<string, string>
   /** When this session started: the change's baseline when no run was green. */
   sessionStartedAt?: number
   /** Minutes since the snapshot last changed, as the pane header last drew them. */
@@ -427,7 +431,7 @@ function ioOf($: EngineInterface, ctx: Ctx): Io {
 /** A short rook command (status): bounded wait, whole output. */
 async function rookJson($: EngineInterface, ctx: Ctx, args: string[]): Promise<CliResult> {
   try {
-    const ran = await $.process.run([ctx.bin, ...args], { env: CLI_ENV, stdin: '', timeoutMs: 60_000, ...(ctx.cwd !== '' && { cwd: ctx.cwd }) })
+    const ran = await $.process.run([ctx.bin, ...args], { env: ctx.cliEnv, stdin: '', timeoutMs: 60_000, ...(ctx.cwd !== '' && { cwd: ctx.cwd }) })
 
     return { exitCode: ran.exitCode, doc: jsonOf(ran.stdout), stderr: ran.stderr, stdout: ran.stdout }
   } catch (error) {
@@ -447,7 +451,7 @@ async function rookRun(
   env: Record<string, string> = {},
   onLine?: (line: string) => void,
 ): Promise<CliResult> {
-  const stream = $.process.spawn({ argv: [ctx.bin, ...argv], env: { ...CLI_ENV, ...env }, input: '', ...(ctx.cwd !== '' && { cwd: ctx.cwd }) })
+  const stream = $.process.spawn({ argv: [ctx.bin, ...argv], env: { ...ctx.cliEnv, ...env }, input: '', ...(ctx.cwd !== '' && { cwd: ctx.cwd }) })
   const iterator = stream[Symbol.asyncIterator]()
   let stdout = ''
   let stderr = ''
@@ -532,9 +536,14 @@ async function showStatus($: EngineInterface, ctx: Ctx): Promise<void> {
 /** Ask the CLI what only it knows: installed, signed in. Two short calls, never on the poll. */
 async function probe($: EngineInterface, ctx: Ctx): Promise<void> {
   const run = (args: string[]) =>
-    $.process.run([ctx.bin, ...args], { env: CLI_ENV, stdin: '', timeoutMs: 20_000, ...(ctx.cwd !== '' && { cwd: ctx.cwd }) }).catch(() => undefined)
+    $.process.run([ctx.bin, ...args], { env: ctx.cliEnv, stdin: '', timeoutMs: 20_000, ...(ctx.cwd !== '' && { cwd: ctx.cwd }) }).catch(() => undefined)
   const version = await run(['--version'])
-  const installed = version === undefined ? null : versionOf(version.exitCode, version.stdout)
+  let installed = version === undefined ? null : versionOf(version.exitCode, version.stdout)
+
+  // Not on PATH (or its node is not): an app started from the Dock gets a minimal PATH. Look where installs put it.
+  if (installed === null && !ctx.bin.includes('/')) {
+    installed = await findRook($, ctx)
+  }
 
   if (installed === null) {
     ctx.cli = { ...ctx.cli, version: null }
@@ -545,6 +554,33 @@ async function probe($: EngineInterface, ctx: Ctx): Promise<void> {
   const auth = await run(['auth', 'status'])
 
   ctx.cli = { ...ctx.cli, version: installed, auth: auth === undefined ? 'unknown' : authOf(auth.exitCode, `${auth.stdout}\n${auth.stderr}`) }
+}
+
+/** The first install location holding a `rook` that answers `--version`; on success, ctx runs it from there from now on. */
+async function findRook($: EngineInterface, ctx: Ctx): Promise<string | null> {
+  const io = ioOf($, ctx)
+  const path = await $.env.get('PATH')
+
+  for (const dir of rookLocations(await $.env.get('HOME'))) {
+    const entries = await io.list(dir).catch(() => [])
+
+    if (!entries.some(entry => entry.name === ctx.bin && entry.kind !== 'dir')) {
+      continue
+    }
+
+    const env = cliEnvFor(dir, path)
+    const ran = await $.process.run([`${dir}/${ctx.bin}`, '--version'], { env, stdin: '', timeoutMs: 20_000 }).catch(() => undefined)
+    const found = ran === undefined ? null : versionOf(ran.exitCode, ran.stdout)
+
+    if (found !== null) {
+      ctx.bin = `${dir}/${ctx.bin}`
+      ctx.cliEnv = env
+
+      return found
+    }
+  }
+
+  return null
 }
 
 async function readinessNow($: EngineInterface, ctx: Ctx): Promise<RookReadiness | undefined> {
@@ -1146,7 +1182,7 @@ async function startViewer($: EngineInterface, ctx: Ctx): Promise<string> {
 
   const stop = new AbortController()
   ctx.viewer = stop
-  const stream = $.process.spawn({ argv: [ctx.bin, 'ui', '--local', '--no-open'], env: CLI_ENV, input: '', ...(ctx.cwd !== '' && { cwd: ctx.cwd }) })
+  const stream = $.process.spawn({ argv: [ctx.bin, 'ui', '--local', '--no-open'], env: ctx.cliEnv, input: '', ...(ctx.cwd !== '' && { cwd: ctx.cwd }) })
   const iterator = stream[Symbol.asyncIterator]()
   let said = ''
 
@@ -3087,7 +3123,7 @@ async function ciPlan($: EngineInterface, ctx: Ctx, request: CiRequest): Promise
   const profileText = target === undefined ? undefined : await ioOf($, ctx).read(`${loc.agentDir}/profiles/${target.profileId}.yaml`)
   // `rook --version`: a semver pins the npm install in CI; a build's commit does not, and CI installs latest.
   const version = await $.process
-    .run([ctx.bin, '--version'], { env: CLI_ENV, stdin: '', timeoutMs: 10_000 })
+    .run([ctx.bin, '--version'], { env: ctx.cliEnv, stdin: '', timeoutMs: 10_000 })
     .then(ran => (ran.exitCode === 0 ? /\b\d+\.\d+\.\d+(?:[-+][\w.-]+)?\b/.exec(ran.stdout)?.[0] : undefined))
     .catch(() => undefined)
 
@@ -3804,6 +3840,7 @@ export const register: Register = (on, options) => {
     prodPatterns: textOption(options.prodPatterns, 'prod,production,live'),
     approval: { allowRules: allowRulesOf(textOption(options.allowRules, '')) },
     lensDefault: textOption(options.lens, 'qe') === 'dev' ? 'dev' : 'qe',
+    cliEnv: { ...CLI_ENV },
     cwd: '',
     located: undefined,
     agentIndex: undefined,

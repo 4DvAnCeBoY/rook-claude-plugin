@@ -123,6 +123,19 @@ describe('readiness · CLI facts', () => {
     expect((await $.command.run(command('run'))).text).toContain('in the background')
   })
 
+  test('rook missing from PATH, as in an app started from the Dock: found in Homebrew and run from there with its folder on PATH', async ($, on) => {
+    const { world, clock } = await start($, on, { ...workspace(), '/opt/homebrew/bin/rook': '' }, w => {
+      w.isMissingBinary = true
+    })
+    expect(world.probes.some(argv => argv[0] === '/opt/homebrew/bin/rook' && argv[1] === '--version')).toBe(true)
+    expect(world.statuses.at(-1)).not.toContain('install rook')
+
+    expect((await $.command.run(command('run'))).text).toContain('in the background')
+    await clock.advance(10)
+    expect(world.invocations.at(-1)?.[0]).toBe('/opt/homebrew/bin/rook')
+    expect(world.spawnEnvs.at(-1)?.PATH?.startsWith('/opt/homebrew/bin:')).toBe(true)
+  })
+
   test('rook not installed: the pane shows it first and offers Check again', async ($, on) => {
     const { world } = await start($, on, { '.testmuai/rook/settings.json': YAML_SETTINGS }, w => {
       w.isMissingBinary = true

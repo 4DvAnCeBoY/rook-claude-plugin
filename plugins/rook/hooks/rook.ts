@@ -344,6 +344,20 @@ export function parseGenerateFlags(text: string): GenerateRequest | { error: str
 
 export const CLI_ENV = { NO_COLOR: '1', FORCE_COLOR: '0' }
 
+/**
+ * Where an install puts `rook` when the app was not started from a shell: the
+ * Claude desktop app, launched from the Dock, gets a minimal PATH with neither
+ * Homebrew's bin nor the user's own. Tried, in order, when the bare name fails.
+ */
+export function rookLocations(home: string | undefined): string[] {
+  return ['/opt/homebrew/bin', '/usr/local/bin', ...(home ? [`${home}/.local/bin`, `${home}/.npm-global/bin`, `${home}/.volta/bin`, `${home}/.bun/bin`] : [])]
+}
+
+/** rook's environment when it was found outside PATH: its folder first, which also holds the `node` its launcher runs. */
+export function cliEnvFor(dir: string | undefined, path: string | undefined): Record<string, string> {
+  return dir === undefined ? { ...CLI_ENV } : { ...CLI_ENV, PATH: [dir, path ?? '/usr/bin:/bin:/usr/sbin:/sbin'].join(':') }
+}
+
 /** `stdout` is kept for the few commands that answer in prose (`rook agent`, `rook report --rca`). */
 export type CliResult = { exitCode: number; doc: unknown; stderr: string; stdout?: string }
 
